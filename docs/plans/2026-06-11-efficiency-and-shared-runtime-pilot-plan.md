@@ -160,13 +160,15 @@ Purpose: validate real-world relevance only after public fixtures are safe.
 
 ### Phase 0: Baseline Context And Capability Discovery
 
-- [ ] Read `AGENTS.md`, `CLAUDE.md`, `README.md`, `docs/plans/index.md`, this plan, and the main implementation plan.
-- [ ] Capture macOS version, CPU architecture, available memory, and shell environment relevant to runtime measurements.
-- [ ] Capture current Docker context and OrbStack availability without mutating resources.
-- [ ] Capture Apple `container` availability using no-side-effect commands.
-- [ ] Capture Apple `container` help output for build, run, network, volume, exec, logs, status/list, and system commands when available.
-- [ ] Search official Apple `container` and `containerization` docs for shared-runtime, pod, machine, and multi-process-in-one-VM primitives.
-- [ ] Update `docs/plans/index.md` next todo after this phase.
+Evidence: [Phase 0 Capability Discovery Evidence](notes/2026-06-11-phase-0-capability-discovery-evidence.md).
+
+- [x] Read `AGENTS.md`, `CLAUDE.md`, `README.md`, `docs/plans/index.md`, this plan, and the main implementation plan.
+- [x] Capture macOS version, CPU architecture, available memory, and shell environment relevant to runtime measurements.
+- [x] Capture current Docker context and OrbStack availability without mutating resources.
+- [x] Capture Apple `container` availability using no-side-effect commands.
+- [x] Capture Apple `container` help output for build, run, network, volume, exec, logs, status/list, and system commands when available.
+- [x] Search official Apple `container` and `containerization` docs for shared-runtime, pod, machine, and multi-process-in-one-VM primitives.
+- [x] Update `docs/plans/index.md` next todo after this phase.
 
 ### Phase 1: Measurement Harness Design
 
