@@ -35,6 +35,18 @@
 - Document unsupported Compose features explicitly instead of silently ignoring
   them.
 
+## Licensing
+
+- The project license is GNU Affero General Public License v3.0 or later:
+  `AGPL-3.0-or-later`.
+- Project copyright is held as `Copyright (C) 2026 Burak Karahan`.
+- New source files should include SPDX headers where the language and local
+  style allow it:
+  - `SPDX-License-Identifier: AGPL-3.0-or-later`
+  - `Copyright (C) 2026 Burak Karahan`
+- Do not add dependencies, copied code, examples, or generated assets with
+  licenses that conflict with AGPL-3.0-or-later.
+
 ## Compatibility Rules
 
 - Preserve Compose semantics where they matter for local development:
