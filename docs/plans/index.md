@@ -9,4 +9,4 @@ Status terms: `active`, `paused`, `blocked`, `ready-for-verification`,
 
 | Status | Plan | Owner | Next Todo | Verification |
 | --- | --- | --- | --- | --- |
-| _No active plans._ |  |  |  |  |
+| active | [Container Compose Adapter Implementation Plan](2026-06-11-container-compose-adapter-implementation-plan.md) | `tools/apple-container-compose-adapter` | Start Phase 0 by confirming the implementation stack and collecting a no-side-effect Apple `container` capability snapshot, including build/network/health surfaces when available. | Not started; planning artifact refined for OrbStackless readiness; no implementation yet. |
