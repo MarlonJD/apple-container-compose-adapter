@@ -75,10 +75,59 @@
 - Saved plans must be self-contained: include objective, scope, assumptions,
   phases, verification, risks, dependencies, ownership boundaries, explicit
   out-of-scope items, and an `Execution Prompt` section.
-- If `docs/plans/index.md`, `docs/plans/completed/index.md`, or
-  `docs/plans/notes/index.md` exist, keep them aligned with created, updated,
-  completed, superseded, or blocked plans. If they do not exist, create them
-  when the planning workflow needs durable tracking.
+- End every saved plan with an `Execution Prompt` section containing the exact
+  prompt the user can paste to have Codex implement that plan.
+- In the final response for any plan creation or plan update, link to the saved
+  plan file, summarize only the highest-signal points, and include the exact
+  `Execution Prompt` text from the saved plan.
+- Plan and review with Google Engineering Practices principles: improve code
+  health, prefer facts/tests/project conventions over preference, avoid
+  speculative flexibility, separate refactors from behavior changes when
+  practical, and use `Blocking`, `Suggestion`, `Nit`, or `FYI` for review
+  findings when useful.
+
+### Plan And Todo Tracking
+
+- This `AGENTS.md` is authoritative for this repository's plan tracking
+  lifecycle. Parent monorepo rules apply only when updating the submodule
+  pointer or doing explicit parent integration work.
+- The active tracking files are:
+  - `docs/plans/index.md`
+  - `docs/plans/completed/index.md`
+  - `docs/plans/notes/index.md`
+- Use these index status terms consistently: `active`, `paused`, `blocked`,
+  `ready-for-verification`, `completed`, `archived`, `superseded`,
+  `note-open`, and `note-closed`.
+- Update `docs/plans/index.md` when a plan is created, materially paused,
+  blocked, resumed, verified, completed, superseded, or archived.
+- Keep only the next concrete todo per active plan in `docs/plans/index.md`;
+  detailed task lists stay inside the plan artifact.
+- Move a plan to `docs/plans/completed/` only after its objective is met,
+  required verification has passed or the coverage gap is documented, and
+  remaining work is captured in a note or follow-up plan. Preserve the original
+  filename when moving a completed plan.
+- Record completed plans in `docs/plans/completed/index.md` with completion
+  date, original location, owner, verification, commit or evidence pointer, and
+  follow-up note link when applicable.
+- Store durable post-plan facts, blockers, accepted risks, missing evidence,
+  compatibility gaps, and owner handoffs in `docs/plans/notes/`.
+- Track notes in `docs/plans/notes/index.md` using `note-open` or
+  `note-closed`.
+- Superseded plans may move to `completed/` only when the supersession is
+  explicit and the replacement plan is linked. If completion evidence is not
+  verified, leave the old plan in place and mark it `superseded` in the active
+  index.
+- For historical plans, do not infer completion from old dates alone. Leave
+  unverified historical plans in place; add an index row only when a human or
+  agent has inspected and classified the plan.
+- Before committing a task that touches plan artifacts, verify that the active
+  index row, next todo, verification status, completed archive row, and note
+  entries match the work actually performed.
+- A plan execution task is not complete until its active index row and todo
+  match the actual final state. If the plan objective is complete, close or
+  remove the active row, add the completed index entry, and move the plan into
+  `docs/plans/completed/` in the same task. If the plan remains active, update
+  the row to the next real todo instead of leaving completed work open.
 
 ## Implementation Guidance
 
