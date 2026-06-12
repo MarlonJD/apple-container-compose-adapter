@@ -40,6 +40,21 @@ struct Phase6BenchmarkHarness {
             try await Self.prepareSeedImageStore(path: prepareSeedImageStore, plan: seedPlan, options: options)
         }
 
+        if options.warmStatePrimerPolicy != .none {
+            let projectName = options.projectName(forIteration: 1)
+            let plan = try makePlan(options: options, projectName: projectName)
+            FileHandle.standardError.write(
+                Data("phase6-benchmark: priming \(options.effectiveLifecycleMode.rawValue) warm state\n".utf8)
+            )
+            try await primeWarmState(
+                options.warmStatePrimerPolicy,
+                plan: plan,
+                backend: backend,
+                executor: executor,
+                approval: approval
+            )
+        }
+
         for iteration in 1...options.iterations {
             let projectName = options.projectName(forIteration: iteration)
             let plan = try makePlan(options: options, projectName: projectName)
@@ -192,6 +207,49 @@ struct Phase6BenchmarkHarness {
             return results.contains(true) ? .partialHit : .invalid
         } catch {
             return .invalid
+        }
+    }
+
+    private static func primeWarmState(
+        _ policy: Phase6WarmStatePrimerPolicy,
+        plan: RuntimePlan,
+        backend: LinuxPodBackend,
+        executor: ContainerizationLinuxPodRuntimeExecutor,
+        approval: RuntimeApproval
+    ) async throws {
+        switch policy {
+        case .none:
+            return
+        case .preservedVolume:
+            _ = try await backend.execute(
+                command: .up,
+                plan: plan,
+                options: RuntimeOptions(),
+                approval: approval
+            )
+            _ = try await cleanupAfterIteration(
+                .preserveVolumes,
+                backend: backend,
+                plan: plan,
+                approval: approval
+            )
+        case .emptyPersistentPod:
+            let projectRuntimeOnlyPlan = RuntimePlan(project: plan.project, services: [])
+            let projectResource = backend.stateStore.projectName(for: plan.project)
+            _ = try await backend.execute(
+                command: .up,
+                plan: projectRuntimeOnlyPlan,
+                options: RuntimeOptions(),
+                approval: approval
+            )
+            try await executor.ensurePodCreated(project: projectResource)
+        case .allWarmProjectRuntime:
+            _ = try await backend.execute(
+                command: .up,
+                plan: plan,
+                options: RuntimeOptions(),
+                approval: approval
+            )
         }
     }
 

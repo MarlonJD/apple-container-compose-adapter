@@ -242,9 +242,11 @@ Status: in progress. Stage 8A instrumentation/classification is complete; see
 Stage 8B rootfs/initfs cache code is complete; see
 `docs/plans/notes/2026-06-12-stage-8b-rootfs-initfs-cache-slice.md`.
 Stage 8C-8E warm volume, persistent pod/hotplug, and all-warm benchmark
-policy code is complete; see
+policy plus signed A-G runtime evidence are complete; see
 `docs/plans/notes/2026-06-12-stage-8c-8d-8e-warm-runtime-slice.md`.
-Signed E/F/G runtime validation remains the next approval-gated task.
+The evidence is not a viability pass: F persistent pod/hotplug failed, process
+RSS and cgroup peak are not fully represented, and host-port/load-window
+metrics remain `notMeasured`.
 
 Prepare:
 

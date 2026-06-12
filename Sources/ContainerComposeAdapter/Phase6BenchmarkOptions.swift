@@ -9,6 +9,13 @@ public enum Phase6IterationCleanupPolicy: String, Codable, Equatable, Sendable {
     case preserveProjectRuntime
 }
 
+public enum Phase6WarmStatePrimerPolicy: String, Codable, Equatable, Sendable {
+    case none
+    case preservedVolume
+    case emptyPersistentPod
+    case allWarmProjectRuntime
+}
+
 public struct Phase6BenchmarkOptions: Equatable, Sendable {
     public var iterations = 1
     public var projectPrefix = "phase6-backend"
@@ -57,6 +64,22 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
              .rootfsCacheHitRuntime,
              .initfsCacheHitRuntime:
             return .fullProjectAndVolumes
+        }
+    }
+
+    public var warmStatePrimerPolicy: Phase6WarmStatePrimerPolicy {
+        switch effectiveLifecycleMode {
+        case .warmPreservedVolume:
+            return .preservedVolume
+        case .persistentPodHotplug:
+            return .emptyPersistentPod
+        case .allWarmProjectRuntime:
+            return .allWarmProjectRuntime
+        case .coldRuntime,
+             .imageStoreSeededFreshRuntime,
+             .rootfsCacheHitRuntime,
+             .initfsCacheHitRuntime:
+            return .none
         }
     }
 

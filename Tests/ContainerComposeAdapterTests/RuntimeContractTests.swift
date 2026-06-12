@@ -933,6 +933,24 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(warmVolume.cleanupPolicy(isFinalIteration: true), .fullProjectAndVolumes)
     }
 
+    func testStage8WarmLifecycleModesDeclareUnrecordedPrimerPolicy() throws {
+        var options = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "stage8.jsonl",
+            "--approval-token", "token"
+        ])
+
+        XCTAssertEqual(options.warmStatePrimerPolicy, .none)
+
+        options.lifecycleMode = .warmPreservedVolume
+        XCTAssertEqual(options.warmStatePrimerPolicy, .preservedVolume)
+
+        options.lifecycleMode = .persistentPodHotplug
+        XCTAssertEqual(options.warmStatePrimerPolicy, .emptyPersistentPod)
+
+        options.lifecycleMode = .allWarmProjectRuntime
+        XCTAssertEqual(options.warmStatePrimerPolicy, .allWarmProjectRuntime)
+    }
+
     func testStage8BenchmarkEvidenceValidatorRequiresClassifiedMetricsAndNotMeasuredGaps() {
         let valid = Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T13:00:00Z",
@@ -1059,6 +1077,47 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(
             Set(Stage8BenchmarkEvidenceValidator().validate(records: [markerOnly]).map(\.code)),
             ["stage8-pod-reuse-unverified"]
+        )
+    }
+
+    func testStage8RuntimeEvidenceFilesValidateToKnownRuntimeBlockers() throws {
+        let evidenceDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent("docs/evidence/linuxpod-stage8-benchmark", isDirectory: true)
+        let validator = Stage8BenchmarkEvidenceValidator()
+        let successfulModes = [
+            "20260612T180000Z-stage8-A-cold-runtime.jsonl",
+            "20260612T180000Z-stage8-B-image-store-seeded-fresh-runtime.jsonl",
+            "20260612T180000Z-stage8-C-rootfs-cache-hit-runtime.jsonl",
+            "20260612T180000Z-stage8-D-initfs-cache-hit-runtime.jsonl",
+            "20260612T180000Z-stage8-E-warm-preserved-volume.jsonl",
+            "20260612T180000Z-stage8-G-all-warm-project-runtime.jsonl"
+        ]
+
+        for filename in successfulModes {
+            let diagnostics = try validator.validate(evidenceURL: evidenceDir.appendingPathComponent(filename))
+            XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage8-process-rss-missing"], filename)
+        }
+
+        let persistentPodDiagnostics = try validator.validate(
+            evidenceURL: evidenceDir.appendingPathComponent(
+                "20260612T180000Z-stage8-F-persistent-pod-hotplug.jsonl"
+            )
+        )
+        XCTAssertEqual(
+            Set(persistentPodDiagnostics.map(\.code)),
+            [
+                "stage8-startup-duration-missing",
+                "stage8-rootfs-prep-duration-missing",
+                "stage8-initfs-prep-duration-missing",
+                "stage8-volume-duration-missing",
+                "stage8-pod-duration-missing",
+                "stage8-container-start-duration-missing",
+                "stage8-healthcheck-duration-missing",
+                "stage8-healthcheck-attempts-missing",
+                "stage8-guest-metrics-missing",
+                "stage8-process-rss-missing",
+                "stage8-data-footprint-missing"
+            ]
         )
     }
 

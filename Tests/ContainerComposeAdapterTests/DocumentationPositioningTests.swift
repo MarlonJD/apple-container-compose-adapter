@@ -104,8 +104,8 @@ final class DocumentationPositioningTests: XCTestCase {
         let notesIndex = try readText("docs/plans/notes/index.md")
         let note = try readText("docs/plans/notes/2026-06-12-stage-6-cold-warm-benchmark-decision.md")
 
-        XCTAssertTrue(activeIndex.contains("Stage 8C-8E warm volume, persistent pod/hotplug, and all-warm benchmark policy code is complete"))
-        XCTAssertTrue(activeIndex.contains("persistent project LinuxPod + rootfs/initfs/volume cache + service hotplug/reuse"))
+        XCTAssertTrue(activeIndex.contains("Stage 8 signed A-G runtime evidence is recorded"))
+        XCTAssertTrue(activeIndex.contains("F failed with `invalidState: \"pod must be initialized to add container\"`"))
         XCTAssertTrue(notesIndex.contains("note-closed | [Stage 6 Cold/Warm Comparative Benchmark Decision]"))
         XCTAssertTrue(notesIndex.contains("image-store-seeded fresh runtime `5/5` run"))
 
