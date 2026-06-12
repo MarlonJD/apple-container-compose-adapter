@@ -7,9 +7,14 @@ public struct LinuxPodStateStore: Sendable {
     public static let ownedPrefix = "cca-linuxpod-"
 
     public let root: URL
+    public let cacheRoot: URL
 
-    public init(root: URL = URL(fileURLWithPath: ".container-compose-adapter", isDirectory: true)) {
+    public init(
+        root: URL = URL(fileURLWithPath: ".container-compose-adapter", isDirectory: true),
+        cacheRoot: URL? = nil
+    ) {
         self.root = root
+        self.cacheRoot = cacheRoot ?? root.appendingPathComponent("cache", isDirectory: true)
     }
 
     public func projectName(for project: ProjectName) -> String {
@@ -26,12 +31,25 @@ public struct LinuxPodStateStore: Sendable {
     }
 
     public func rootfsPath(project: ProjectName, image: String) -> URL {
-        let escaped = image
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
         return runtimeDirectory(for: project)
             .appendingPathComponent("rootfs", isDirectory: true)
-            .appendingPathComponent("\(escaped).ext4")
+            .appendingPathComponent("\(cacheKey(for: image)).ext4")
+    }
+
+    public func rootfsCachePath(image: String) -> URL {
+        cacheRoot
+            .appendingPathComponent("rootfs", isDirectory: true)
+            .appendingPathComponent("\(cacheKey(for: image)).ext4")
+    }
+
+    public func initfsPath(project: ProjectName) -> URL {
+        runtimeDirectory(for: project).appendingPathComponent("initfs.ext4")
+    }
+
+    public func initfsCachePath(identifier: String = "default-vminit") -> URL {
+        cacheRoot
+            .appendingPathComponent("initfs", isDirectory: true)
+            .appendingPathComponent("\(cacheKey(for: identifier)).ext4")
     }
 
     public func volumePath(project: ProjectName, volume: VolumePlan) -> URL {
@@ -76,6 +94,13 @@ public struct LinuxPodStateStore: Sendable {
         if contents.isEmpty {
             try FileManager.default.removeItem(at: directory)
         }
+    }
+
+    private func cacheKey(for value: String) -> String {
+        value
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: "@", with: "_")
     }
 }
 
@@ -224,26 +249,12 @@ public struct LinuxPodBackend: RuntimeBackend {
         builder.append(
             kind: .createProjectRuntime,
             resourceName: projectResource,
-            description: "Create or reuse one project-scoped LinuxPod VM.",
+            description: "Create or reuse one project-scoped LinuxPod VM with reusable initfs cache.",
             mutatesRuntime: true,
-            metadata: [
-                "state": stateStore.runtimeDirectory(for: plan.project).path,
-                "hosts": serviceHostsMetadata(plan)
-            ]
+            metadata: projectRuntimeMetadata(plan)
         )
 
-        let images = Set(plan.services.map(\.image)).sorted()
-        for image in images {
-            let rootfsPath = stateStore.rootfsPath(project: plan.project, image: image)
-            let cacheStatus = FileManager.default.fileExists(atPath: rootfsPath.path) ? "hit" : "miss"
-            builder.append(
-                kind: .prepareImageRootfs,
-                resourceName: image,
-                description: "Prepare public image rootfs for \(image); cache \(cacheStatus).",
-                mutatesRuntime: true,
-                metadata: ["rootfs": rootfsPath.path, "cache": cacheStatus]
-            )
-        }
+        appendPrepareImageRootfsActions(images: Set(plan.services.map(\.image)).sorted(), plan: plan, builder: &builder)
 
         for volume in plan.volumes {
             builder.append(
@@ -313,26 +324,12 @@ public struct LinuxPodBackend: RuntimeBackend {
         builder.append(
             kind: .createProjectRuntime,
             resourceName: projectResource,
-            description: "Create or reuse one project-scoped LinuxPod VM for one-off jobs.",
+            description: "Create or reuse one project-scoped LinuxPod VM for one-off jobs with reusable initfs cache.",
             mutatesRuntime: true,
-            metadata: [
-                "state": stateStore.runtimeDirectory(for: plan.project).path,
-                "hosts": serviceHostsMetadata(plan)
-            ]
+            metadata: projectRuntimeMetadata(plan)
         )
 
-        let images = Set(services.map(\.image)).sorted()
-        for image in images {
-            let rootfsPath = stateStore.rootfsPath(project: plan.project, image: image)
-            let cacheStatus = FileManager.default.fileExists(atPath: rootfsPath.path) ? "hit" : "miss"
-            builder.append(
-                kind: .prepareImageRootfs,
-                resourceName: image,
-                description: "Prepare public image rootfs for \(image); cache \(cacheStatus).",
-                mutatesRuntime: true,
-                metadata: ["rootfs": rootfsPath.path, "cache": cacheStatus]
-            )
-        }
+        appendPrepareImageRootfsActions(images: Set(services.map(\.image)).sorted(), plan: plan, builder: &builder)
 
         let selectedVolumeNames = Set(
             services.flatMap(\.mounts).compactMap { mount in
@@ -395,6 +392,39 @@ public struct LinuxPodBackend: RuntimeBackend {
                     metadata: readinessMetadata(readiness)
                 )
             }
+        }
+    }
+
+    private func projectRuntimeMetadata(_ plan: RuntimePlan) -> [String: String] {
+        [
+            "state": stateStore.runtimeDirectory(for: plan.project).path,
+            "hosts": serviceHostsMetadata(plan),
+            "initfs": stateStore.initfsPath(project: plan.project).path,
+            "initfsCache": stateStore.initfsCachePath().path,
+            "initfsCacheStatus": cacheStatus(stateStore.initfsCachePath())
+        ]
+    }
+
+    private func appendPrepareImageRootfsActions(
+        images: [String],
+        plan: RuntimePlan,
+        builder: inout ActionBuilder
+    ) {
+        for image in images {
+            let rootfsPath = stateStore.rootfsPath(project: plan.project, image: image)
+            let rootfsCachePath = stateStore.rootfsCachePath(image: image)
+            let rootfsCacheStatus = cacheStatus(rootfsCachePath)
+            builder.append(
+                kind: .prepareImageRootfs,
+                resourceName: image,
+                description: "Prepare public image rootfs for \(image); reusable cache \(rootfsCacheStatus).",
+                mutatesRuntime: true,
+                metadata: [
+                    "rootfs": rootfsPath.path,
+                    "rootfsCache": rootfsCachePath.path,
+                    "cache": rootfsCacheStatus
+                ]
+            )
         }
     }
 
@@ -479,6 +509,10 @@ public struct LinuxPodBackend: RuntimeBackend {
     private func serviceHostsMetadata(_ plan: RuntimePlan) -> String {
         let hostnames = dependencyOrderedServices(plan.services).map(\.name).joined(separator: " ")
         return "127.0.0.1 \(hostnames)"
+    }
+
+    private func cacheStatus(_ url: URL) -> String {
+        FileManager.default.fileExists(atPath: url.path) ? "hit" : "miss"
     }
 
     private func jobDependencyClosure(_ plan: RuntimePlan) -> [ServicePlan] {

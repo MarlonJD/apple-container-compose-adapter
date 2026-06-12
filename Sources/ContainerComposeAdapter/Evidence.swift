@@ -8,6 +8,7 @@ public struct DryRunEvidenceRecord: Codable, Equatable, Sendable {
         public let image: String
         public let cache: String
         public let rootfs: String
+        public let rootfsCache: String
     }
 
     public struct CleanupProof: Codable, Equatable, Sendable {
@@ -89,7 +90,8 @@ public struct DryRunEvidenceRecord: Codable, Equatable, Sendable {
             return CacheEvent(
                 image: action.resourceName ?? "",
                 cache: action.metadata["cache"] ?? "unknown",
-                rootfs: action.metadata["rootfs"] ?? ""
+                rootfs: action.metadata["rootfs"] ?? "",
+                rootfsCache: action.metadata["rootfsCache"] ?? ""
             )
         }
         self.cleanupProof = CleanupProof.planned(dryRun: dryRun)
@@ -127,7 +129,8 @@ public struct RuntimeExecutionEvidenceRecord: Codable, Equatable, Sendable {
             return DryRunEvidenceRecord.CacheEvent(
                 image: action.resourceName ?? "",
                 cache: action.metadata["cache"] ?? "unknown",
-                rootfs: action.metadata["rootfs"] ?? ""
+                rootfs: action.metadata["rootfs"] ?? "",
+                rootfsCache: action.metadata["rootfsCache"] ?? ""
             )
         }
         self.cleanupProof = DryRunEvidenceRecord.CleanupProof.executed(

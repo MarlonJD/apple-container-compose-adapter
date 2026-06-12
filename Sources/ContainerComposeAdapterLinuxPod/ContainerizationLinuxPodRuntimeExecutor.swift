@@ -161,9 +161,10 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         try FileManager.default.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
         let imageStore = try ImageStore(path: runtimeDirectory.appendingPathComponent("image-store", isDirectory: true))
         let initImage = try await imageStore.getInitImage(reference: initImageReference)
-        let initfs = try await initImage.initBlock(
-            at: runtimeDirectory.appendingPathComponent("initfs.ext4"),
-            for: .linuxArm
+        let initfs = try await prepareInitfs(
+            event: event,
+            initImage: initImage,
+            runtimeDirectory: runtimeDirectory
         )
         var kernelConfig = Kernel(path: kernel, platform: .linuxArm)
         kernelConfig.commandLine.addDebug()
@@ -194,6 +195,7 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
             throw unsupported(event, reason: "missing rootfs path")
         }
         let rootfsURL = URL(fileURLWithPath: rootfsValue)
+        let rootfsCacheURL = event.metadata["rootfsCache"].map { URL(fileURLWithPath: $0) }
         try FileManager.default.createDirectory(
             at: rootfsURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -205,7 +207,22 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
                 declaredVolumes: try await declaredVolumes(for: imageValue)
             )
         }
-        if !FileManager.default.fileExists(atPath: rootfsURL.path) {
+        if let rootfsCacheURL {
+            try ensureAdapterOwnedCachePath(rootfsCacheURL)
+            try FileManager.default.createDirectory(
+                at: rootfsCacheURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if !FileManager.default.fileExists(atPath: rootfsCacheURL.path) {
+                let unpacker = EXT4Unpacker(blockSizeInBytes: defaultRootfsSizeBytes)
+                _ = try await unpacker.unpack(
+                    imageValue,
+                    for: SystemPlatform.linuxArm.ociPlatform(),
+                    at: rootfsCacheURL
+                )
+            }
+            try copyReplacing(source: rootfsCacheURL, destination: rootfsURL)
+        } else if !FileManager.default.fileExists(atPath: rootfsURL.path) {
             let unpacker = EXT4Unpacker(blockSizeInBytes: defaultRootfsSizeBytes)
             _ = try await unpacker.unpack(
                 imageValue,
@@ -215,6 +232,41 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         }
         state.rootfsPathByImage[image] = rootfsURL
         states[event.project] = state
+    }
+
+    private func prepareInitfs(
+        event: LinuxPodRuntimeEvent,
+        initImage: InitImage,
+        runtimeDirectory: URL
+    ) async throws -> Mount {
+        let runtimeURL = URL(
+            fileURLWithPath: event.metadata["initfs"] ?? runtimeDirectory.appendingPathComponent("initfs.ext4").path
+        )
+        try FileManager.default.createDirectory(
+            at: runtimeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        guard let cacheValue = event.metadata["initfsCache"], !cacheValue.isEmpty else {
+            return try await initImage.initBlock(at: runtimeURL, for: .linuxArm)
+        }
+
+        let cacheURL = URL(fileURLWithPath: cacheValue)
+        try ensureAdapterOwnedCachePath(cacheURL)
+        try FileManager.default.createDirectory(
+            at: cacheURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if !FileManager.default.fileExists(atPath: cacheURL.path) {
+            _ = try await initImage.initBlock(at: cacheURL, for: .linuxArm)
+        }
+        try copyReplacing(source: cacheURL, destination: runtimeURL)
+        return .block(
+            format: "ext4",
+            source: runtimeURL.path,
+            destination: "/",
+            options: ["ro"]
+        )
     }
 
     // Each container gets a private clone of the prepared base image rootfs.
@@ -686,6 +738,18 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         }
     }
 
+    private func ensureAdapterOwnedCachePath(_ url: URL) throws {
+        let standardized = url.standardizedFileURL
+        let components = standardized.pathComponents
+        guard standardized.pathExtension == "ext4",
+              components.contains(".container-compose-adapter"),
+              components.contains("cache") else {
+            throw RuntimeBackendError.runtimeUnavailable(
+                "Refusing to mutate non-adapter cache path \(url.path)."
+            )
+        }
+    }
+
     private func ensureAdapterOwnedVolumePath(_ url: URL) throws {
         let standardized = url.standardizedFileURL
         let volumes = standardized.deletingLastPathComponent()
@@ -701,6 +765,17 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
     private func unsupported(_ event: LinuxPodRuntimeEvent, reason: String? = nil) -> RuntimeBackendError {
         let suffix = reason.map { ": \($0)" } ?? "."
         return .runtimeUnavailable("LinuxPod runtime action \(event.kind.rawValue) is not available in the Phase 3 executor\(suffix)")
+    }
+
+    private func copyReplacing(source: URL, destination: URL) throws {
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.copyItem(at: source, to: destination)
     }
 }
 

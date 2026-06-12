@@ -239,7 +239,9 @@ Why:
 
 Status: in progress. Stage 8A instrumentation/classification is complete; see
 `docs/plans/notes/2026-06-12-stage-8a-instrumentation-classification.md`.
-Stage 8B is the next concrete slice.
+Stage 8B rootfs/initfs cache code is complete; see
+`docs/plans/notes/2026-06-12-stage-8b-rootfs-initfs-cache-slice.md`.
+Signed runtime validation remains the next approval-gated task.
 
 Prepare:
 

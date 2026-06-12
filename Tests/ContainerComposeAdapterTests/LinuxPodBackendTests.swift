@@ -20,6 +20,39 @@ final class LinuxPodBackendTests: XCTestCase {
         XCTAssertTrue(result.renderText().contains("SESSION_TOKEN=<redacted>"))
     }
 
+    func testDryRunPlansReusableRootfsAndInitfsCacheState() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cca-stage8b-cache-\(UUID().uuidString)", isDirectory: true)
+        let stateStore = LinuxPodStateStore(
+            root: root.appendingPathComponent("state", isDirectory: true),
+            cacheRoot: root.appendingPathComponent("cache", isDirectory: true)
+        )
+        let plan = SamplePlans.publicImageSmoke(project: ProjectName("Stage8B Cache"))
+        let rootfsCache = stateStore.rootfsCachePath(image: "mirror.gcr.io/library/nginx:alpine")
+        let initfsCache = stateStore.initfsCachePath()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: rootfsCache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: rootfsCache)
+        try FileManager.default.createDirectory(at: initfsCache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: initfsCache)
+
+        let result = try LinuxPodBackend(stateStore: stateStore)
+            .renderDryRun(command: .up, plan: plan, options: RuntimeOptions())
+
+        let createRuntime = try XCTUnwrap(result.actions.first { $0.kind == .createProjectRuntime })
+        XCTAssertEqual(createRuntime.metadata["initfs"], stateStore.initfsPath(project: plan.project).path)
+        XCTAssertEqual(createRuntime.metadata["initfsCache"], initfsCache.path)
+        XCTAssertEqual(createRuntime.metadata["initfsCacheStatus"], "hit")
+
+        let prepareRootfs = try XCTUnwrap(result.actions.first { $0.kind == .prepareImageRootfs })
+        XCTAssertEqual(prepareRootfs.metadata["rootfs"], stateStore.rootfsPath(project: plan.project, image: "mirror.gcr.io/library/nginx:alpine").path)
+        XCTAssertEqual(prepareRootfs.metadata["rootfsCache"], rootfsCache.path)
+        XCTAssertEqual(prepareRootfs.metadata["cache"], "hit")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stateStore.projectDirectory(for: plan.project).path))
+    }
+
     func testLinuxPodExecutionRequiresExplicitApproval() async throws {
         let backend = LinuxPodBackend()
         let plan = SamplePlans.publicImageSmoke(project: ProjectName("Needs Approval"))
@@ -77,6 +110,8 @@ final class LinuxPodBackendTests: XCTestCase {
             event.project == "cca-linuxpod-phase3-public-smoke"
         })
         XCTAssertEqual(executor.events.first?.resourceName, "cca-linuxpod-phase3-public-smoke")
+        XCTAssertNotNil(executor.events.first?.metadata["initfsCache"])
+        XCTAssertNotNil(executor.events.first { $0.kind == .prepareImageRootfs }?.metadata["rootfsCache"])
         XCTAssertFalse(executor.events.contains { $0.description.contains("dry-run-token") })
     }
 
@@ -376,6 +411,7 @@ final class LinuxPodBackendTests: XCTestCase {
         XCTAssertEqual(evidence.cleanupProof.ownedPrefix, "cca-linuxpod-")
         XCTAssertEqual(evidence.cacheEvents.first?.cache, "miss")
         XCTAssertEqual(evidence.cacheEvents.first?.image, "mirror.gcr.io/library/nginx:alpine")
+        XCTAssertTrue(evidence.cacheEvents.first?.rootfsCache.contains("/cache/rootfs/") ?? false)
     }
 
     func testRuntimeExecutionEvidenceRecordsExecutedCleanupProof() throws {

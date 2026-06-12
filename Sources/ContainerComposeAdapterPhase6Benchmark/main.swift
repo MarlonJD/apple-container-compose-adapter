@@ -411,7 +411,7 @@ private func benchmarkEnvironment(
     seedResult: SeedImageStoreCopyResult
 ) -> BenchmarkRunMetadata {
     let imageStatuses = plan.services.map { service in
-        cacheStatus(path: backend.stateStore.rootfsPath(project: plan.project, image: service.image).path)
+        cacheStatus(path: backend.stateStore.rootfsCachePath(image: service.image).path)
     }
     let rootfsStatus = combinedCacheStatus(imageStatuses)
     let volumeStatuses = plan.volumes.map { volume in
@@ -441,7 +441,7 @@ private func benchmarkEnvironment(
         ),
         imageCacheStatus: seedResult.imageCacheStatus,
         rootfsCacheStatus: rootfsStatus,
-        initfsCacheStatus: cacheStatus(path: runtimeDirectory.appendingPathComponent("initfs.ext4").path),
+        initfsCacheStatus: cacheStatus(path: backend.stateStore.initfsCachePath().path),
         volumeExistedBeforeRun: volumeStatuses.contains(true),
         hostPortPublished: nil,
         hostPortTTFBSeconds: nil,
