@@ -913,6 +913,26 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(options.effectiveLifecycleMode, .rootfsCacheHitRuntime)
     }
 
+    func testStage8AllWarmBenchmarkPolicyReusesProjectUntilFinalCleanup() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "stage8.jsonl",
+            "--approval-token", "token",
+            "--project-prefix", "stage8",
+            "--run-label", "all-warm",
+            "--lifecycle-mode", "all-warm-project-runtime"
+        ])
+
+        XCTAssertEqual(options.projectName(forIteration: 1), "stage8-all-warm-shared")
+        XCTAssertEqual(options.projectName(forIteration: 2), "stage8-all-warm-shared")
+        XCTAssertEqual(options.cleanupPolicy(isFinalIteration: false), .preserveProjectRuntime)
+        XCTAssertEqual(options.cleanupPolicy(isFinalIteration: true), .fullProjectAndVolumes)
+
+        var warmVolume = options
+        warmVolume.lifecycleMode = .warmPreservedVolume
+        XCTAssertEqual(warmVolume.cleanupPolicy(isFinalIteration: false), .preserveVolumes)
+        XCTAssertEqual(warmVolume.cleanupPolicy(isFinalIteration: true), .fullProjectAndVolumes)
+    }
+
     func testStage8BenchmarkEvidenceValidatorRequiresClassifiedMetricsAndNotMeasuredGaps() {
         let valid = Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T13:00:00Z",
@@ -1003,6 +1023,27 @@ final class RuntimeContractTests: XCTestCase {
                 "stage8-data-footprint-missing",
                 "stage8-cleanup-leftovers"
             ]
+        )
+    }
+
+    func testStage8BenchmarkEvidenceValidatorAcceptsWarmReuseWithFinalCleanCleanup() {
+        let preserved = completeStage8IterationRecord(
+            lifecycleMode: .allWarmProjectRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: true,
+            cleanupResult: "preserved-project-runtime-for-warm-reuse"
+        )
+        let finalClean = completeStage8IterationRecord(
+            lifecycleMode: .allWarmProjectRuntime,
+            iteration: 2,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean"
+        )
+
+        XCTAssertEqual(Stage8BenchmarkEvidenceValidator().validate(records: [preserved, finalClean]), [])
+        XCTAssertEqual(
+            Set(Stage8BenchmarkEvidenceValidator().validate(records: [preserved]).map(\.code)),
+            ["stage8-final-cleanup-missing"]
         )
     }
 
@@ -2155,6 +2196,59 @@ final class RuntimeContractTests: XCTestCase {
             hostPortProbeStatus: hostPortProbeStatus,
             hostPortPublishingNotImplemented: true,
             loadWindowStatus: loadWindowStatus
+        )
+    }
+
+    private func completeStage8IterationRecord(
+        lifecycleMode: BenchmarkLifecycleMode,
+        iteration: Int,
+        cleanupStateDirectoryExistsAfterCleanup: Bool,
+        cleanupResult: String
+    ) -> Phase6BenchmarkIterationRecord {
+        Phase6BenchmarkIterationRecord(
+            timestamp: "2026-06-12T13:10:0\(iteration)Z",
+            project: "cca-linuxpod-stage8-all-warm",
+            runLabel: "stage8-all-warm",
+            iteration: iteration,
+            environment: benchmarkMetadata(
+                lifecycle: .persistentWarmProjectRuntime,
+                lifecycleMode: lifecycleMode,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .hit,
+                initfsCacheStatus: .hit,
+                volumeExistedBeforeRun: true,
+                podExistedBeforeRun: true
+            ),
+            status: .measured,
+            durationsSeconds: Phase6BenchmarkDurations(
+                up: 5.0,
+                status: 0.01,
+                logs: 0.01,
+                cleanup: 0.25,
+                rootfsPrep: 0.02,
+                initfsPrep: 0.02,
+                volumeCreateOrReuse: 0.01,
+                podCreateOrReuse: 0.01,
+                containerStart: 0.1,
+                healthcheck: 0.4
+            ),
+            guest: HostFootprintGuestStats(
+                cgroupMemoryCurrentBytes: 128 * 1024 * 1024,
+                cgroupMemoryLimitBytes: nil,
+                cgroupMemoryLimitUnlimited: true,
+                processCount: 7,
+                cpuUsageUsec: 500,
+                blockReadBytes: 2048,
+                blockWriteBytes: 4096,
+                processRSSBytes: 64 * 1024 * 1024
+            ),
+            hostPhysicalMemoryStatus: .blocked,
+            actionCount: 16,
+            cleanupStateDirectoryExistsAfterCleanup: cleanupStateDirectoryExistsAfterCleanup,
+            healthcheckAttempts: 1,
+            dataFootprintBytes: 32 * 1024 * 1024,
+            cleanupResult: cleanupResult,
+            failure: nil
         )
     }
 

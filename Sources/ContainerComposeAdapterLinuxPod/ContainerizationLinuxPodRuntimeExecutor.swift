@@ -153,6 +153,9 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
     }
 
     private func createProjectRuntime(_ event: LinuxPodRuntimeEvent) async throws {
+        if states[event.project] != nil {
+            return
+        }
         let runtimeDirectory = try runtimeDirectory(from: event)
         try ensureAdapterOwnedRuntimeDirectory(runtimeDirectory)
         try ensureVirtualizationEntitlement()
@@ -344,6 +347,12 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         guard let containerID = event.resourceName else {
             throw unsupported(event, reason: "missing container resource name")
         }
+        if state.containers.contains(containerID) {
+            return [
+                "containerReuse": "hit",
+                "podAttachment": state.podCreated ? "reused-existing-pod" : "registered-before-create"
+            ]
+        }
         let rootfs = try containerRootfs(for: service, containerID: containerID, in: state)
 
         let mounts = try containerMounts(for: service, in: state)
@@ -459,11 +468,15 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         guard let containerID = event.resourceName else {
             throw unsupported(event, reason: "missing container resource name")
         }
+        if state.startedContainers.contains(containerID) {
+            return
+        }
         if !state.podCreated {
             try await state.pod.create()
             state.podCreated = true
         }
         try await state.pod.startContainer(containerID)
+        state.startedContainers.insert(containerID)
         states[event.project] = state
     }
 
@@ -496,11 +509,19 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         guard let containerID = event.resourceName else {
             throw unsupported(event, reason: "missing job container resource name")
         }
+        if state.completedJobs.contains(service.name) {
+            return [
+                "exitCode": "0",
+                "logs": "reused-completed-job",
+                "jobReuse": "completed-before-run"
+            ]
+        }
         if !state.podCreated {
             try await state.pod.create()
             state.podCreated = true
         }
         try await state.pod.startContainer(containerID)
+        state.startedContainers.insert(containerID)
         let status = try await state.pod.waitContainer(containerID)
         guard status.exitCode == 0 else {
             throw RuntimeBackendError.runtimeUnavailable(
@@ -788,6 +809,7 @@ private struct ProjectRuntime: Sendable {
     var defaultsByImage: [String: ImageRuntimeDefaults] = [:]
     var volumePaths: [String: URL] = [:]
     var containers: Set<String> = []
+    var startedContainers: Set<String> = []
     var containerByService: [String: String] = [:]
     var completedJobs: Set<String> = []
     var logCaptureByService: [String: RuntimeLogCapture] = [:]

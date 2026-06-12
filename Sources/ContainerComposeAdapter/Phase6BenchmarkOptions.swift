@@ -3,6 +3,12 @@
 
 import Foundation
 
+public enum Phase6IterationCleanupPolicy: String, Codable, Equatable, Sendable {
+    case fullProjectAndVolumes
+    case preserveVolumes
+    case preserveProjectRuntime
+}
+
 public struct Phase6BenchmarkOptions: Equatable, Sendable {
     public var iterations = 1
     public var projectPrefix = "phase6-backend"
@@ -23,6 +29,35 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
 
     public var effectiveLifecycleMode: BenchmarkLifecycleMode {
         lifecycleMode ?? BenchmarkLifecycleMode.compatibilityDefault(for: lifecycle)
+    }
+
+    public func projectName(forIteration iteration: Int) -> String {
+        switch effectiveLifecycleMode {
+        case .warmPreservedVolume, .persistentPodHotplug, .allWarmProjectRuntime:
+            return "\(projectPrefix)-\(runLabel)-shared"
+        case .coldRuntime,
+             .imageStoreSeededFreshRuntime,
+             .rootfsCacheHitRuntime,
+             .initfsCacheHitRuntime:
+            return "\(projectPrefix)-\(runLabel)-\(String(format: "%03d", iteration))"
+        }
+    }
+
+    public func cleanupPolicy(isFinalIteration: Bool) -> Phase6IterationCleanupPolicy {
+        if isFinalIteration {
+            return .fullProjectAndVolumes
+        }
+        switch effectiveLifecycleMode {
+        case .warmPreservedVolume:
+            return .preserveVolumes
+        case .persistentPodHotplug, .allWarmProjectRuntime:
+            return .preserveProjectRuntime
+        case .coldRuntime,
+             .imageStoreSeededFreshRuntime,
+             .rootfsCacheHitRuntime,
+             .initfsCacheHitRuntime:
+            return .fullProjectAndVolumes
+        }
     }
 
     public static func parse(_ args: [String]) throws -> Phase6BenchmarkOptions {

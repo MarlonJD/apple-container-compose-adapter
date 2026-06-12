@@ -41,10 +41,11 @@ struct Phase6BenchmarkHarness {
         }
 
         for iteration in 1...options.iterations {
-            let projectName = "\(options.projectPrefix)-\(options.runLabel)-\(String(format: "%03d", iteration))"
+            let projectName = options.projectName(forIteration: iteration)
             let plan = try makePlan(options: options, projectName: projectName)
             let projectResource = backend.stateStore.projectName(for: plan.project)
             let projectDirectory = backend.stateStore.projectDirectory(for: plan.project)
+            let cleanupPolicy = options.cleanupPolicy(isFinalIteration: iteration == options.iterations)
 
             FileHandle.standardError.write(Data("phase6-benchmark: \(options.runLabel) iteration \(iteration)/\(options.iterations) up\n".utf8))
             let record = await runIteration(
@@ -53,6 +54,7 @@ struct Phase6BenchmarkHarness {
                 plan: plan,
                 projectResource: projectResource,
                 projectDirectory: projectDirectory,
+                cleanupPolicy: cleanupPolicy,
                 backend: backend,
                 executor: executor,
                 approval: approval
@@ -213,6 +215,7 @@ struct Phase6BenchmarkHarness {
         plan: RuntimePlan,
         projectResource: String,
         projectDirectory: URL,
+        cleanupPolicy: Phase6IterationCleanupPolicy,
         backend: LinuxPodBackend,
         executor: ContainerizationLinuxPodRuntimeExecutor,
         approval: RuntimeApproval
@@ -223,6 +226,7 @@ struct Phase6BenchmarkHarness {
         var cleanupDuration: Double?
         var guest: HostFootprintGuestStats?
         var actionCount = 0
+        var upActionResults: [RuntimeActionResult] = []
         var seedResult = SeedImageStoreCopyResult.notRequested(
             projectRuntimeDirectoryExistedBeforeSeed: FileManager.default.fileExists(
                 atPath: backend.stateStore.runtimeDirectory(for: plan.project).path
@@ -253,6 +257,7 @@ struct Phase6BenchmarkHarness {
                 approval: approval
             )
             upDuration = elapsedSeconds(since: upStarted)
+            upActionResults = up.actionResults
             actionCount += up.actionResults.count
 
             guest = try await executor.guestStatistics(project: projectResource)
@@ -277,15 +282,20 @@ struct Phase6BenchmarkHarness {
             logsDuration = elapsedSeconds(since: logsStarted)
             actionCount += logs.actionResults.count
 
+            let dataFootprintBeforeCleanup = dataFootprintBytes(projectDirectory)
             let cleanupStarted = Date()
-            let cleanup = try await backend.execute(
-                command: .down,
+            let cleanup = try await cleanupAfterIteration(
+                cleanupPolicy,
+                backend: backend,
                 plan: plan,
-                options: RuntimeOptions(includeVolumes: true),
                 approval: approval
             )
             cleanupDuration = elapsedSeconds(since: cleanupStarted)
             actionCount += cleanup.actionResults.count
+            let cleanupResult = cleanupResultValue(
+                cleanupPolicy,
+                projectDirectory: projectDirectory
+            )
 
             return Phase6BenchmarkIterationRecord(
                 timestamp: iso8601Now(),
@@ -298,12 +308,39 @@ struct Phase6BenchmarkHarness {
                     up: upDuration,
                     status: statusDuration,
                     logs: logsDuration,
-                    cleanup: cleanupDuration
+                    cleanup: cleanupDuration,
+                    rootfsPrep: duration(
+                        upActionResults,
+                        for: [.prepareImageRootfs]
+                    ),
+                    initfsPrep: duration(
+                        upActionResults,
+                        for: [.createProjectRuntime]
+                    ),
+                    volumeCreateOrReuse: duration(
+                        upActionResults,
+                        for: [.createNamedVolume]
+                    ),
+                    podCreateOrReuse: duration(
+                        upActionResults,
+                        for: [.createProjectRuntime]
+                    ),
+                    containerStart: duration(
+                        upActionResults,
+                        for: [.startContainer, .runJob]
+                    ),
+                    healthcheck: duration(
+                        upActionResults,
+                        for: [.waitForReadiness]
+                    )
                 ),
                 guest: guest,
                 hostPhysicalMemoryStatus: .blocked,
                 actionCount: actionCount,
                 cleanupStateDirectoryExistsAfterCleanup: FileManager.default.fileExists(atPath: projectDirectory.path),
+                healthcheckAttempts: up.actionResults.filter { $0.kind == .waitForReadiness }.count,
+                dataFootprintBytes: dataFootprintBeforeCleanup,
+                cleanupResult: cleanupResult,
                 failure: nil
             )
         } catch {
@@ -337,6 +374,93 @@ struct Phase6BenchmarkHarness {
                 failure: "\(error)"
             )
         }
+    }
+
+    private static func cleanupAfterIteration(
+        _ policy: Phase6IterationCleanupPolicy,
+        backend: LinuxPodBackend,
+        plan: RuntimePlan,
+        approval: RuntimeApproval
+    ) async throws -> ExecutionResult {
+        switch policy {
+        case .fullProjectAndVolumes:
+            return try await backend.execute(
+                command: .down,
+                plan: plan,
+                options: RuntimeOptions(includeVolumes: true),
+                approval: approval
+            )
+        case .preserveVolumes:
+            return try await backend.execute(
+                command: .down,
+                plan: plan,
+                options: RuntimeOptions(includeVolumes: false),
+                approval: approval
+            )
+        case .preserveProjectRuntime:
+            return ExecutionResult(
+                backend: .linuxpod,
+                command: .down,
+                status: "preserved-project-runtime-for-warm-reuse"
+            )
+        }
+    }
+
+    private static func cleanupResultValue(
+        _ policy: Phase6IterationCleanupPolicy,
+        projectDirectory: URL
+    ) -> String {
+        switch policy {
+        case .fullProjectAndVolumes:
+            return FileManager.default.fileExists(atPath: projectDirectory.path) ? "leftovers" : "clean"
+        case .preserveVolumes:
+            return "preserved-volume-for-warm-reuse"
+        case .preserveProjectRuntime:
+            return "preserved-project-runtime-for-warm-reuse"
+        }
+    }
+
+    private static func duration(
+        _ results: [RuntimeActionResult],
+        for kinds: Set<PlannedActionKind>
+    ) -> Double? {
+        let values = results.compactMap { result -> Double? in
+            guard kinds.contains(result.kind),
+                  let value = result.metadata["durationSeconds"],
+                  let seconds = Double(value) else {
+                return nil
+            }
+            return seconds
+        }
+        guard !values.isEmpty else {
+            return nil
+        }
+        return values.reduce(0, +)
+    }
+
+    private static func dataFootprintBytes(_ url: URL) -> UInt64? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return 0
+        }
+        var total: UInt64 = 0
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  values.isRegularFile == true,
+                  let fileSize = values.fileSize else {
+                continue
+            }
+            let addition = UInt64(fileSize)
+            let sum = total.addingReportingOverflow(addition)
+            total = sum.overflow ? UInt64.max : sum.partialValue
+        }
+        return total
     }
 }
 

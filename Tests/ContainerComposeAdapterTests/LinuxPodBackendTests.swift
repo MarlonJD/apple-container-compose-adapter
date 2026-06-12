@@ -53,6 +53,53 @@ final class LinuxPodBackendTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: stateStore.projectDirectory(for: plan.project).path))
     }
 
+    func testDryRunPlansWarmPreservedVolumeReuseMetadata() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cca-stage8c-volume-\(UUID().uuidString)", isDirectory: true)
+        let stateStore = LinuxPodStateStore(root: root)
+        let plan = SamplePlans.publicImageSmoke(project: ProjectName("Stage8C Volume"))
+        let volume = try XCTUnwrap(plan.volumes.first { $0.name == "web-cache" })
+        let volumeImage = stateStore.volumeImagePath(project: plan.project, volume: volume)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: volumeImage.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: volumeImage)
+
+        let result = try LinuxPodBackend(stateStore: stateStore)
+            .renderDryRun(command: .up, plan: plan, options: RuntimeOptions())
+
+        let createVolume = try XCTUnwrap(result.actions.first { $0.kind == .createNamedVolume })
+        XCTAssertEqual(createVolume.metadata["path"], stateStore.volumePath(project: plan.project, volume: volume).path)
+        XCTAssertEqual(createVolume.metadata["volumeImage"], volumeImage.path)
+        XCTAssertEqual(createVolume.metadata["volumeLifecycle"], "reuse")
+        XCTAssertEqual(createVolume.metadata["preserveByDefault"], "true")
+    }
+
+    func testDryRunPlansPersistentPodHotplugMetadata() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cca-stage8d-pod-\(UUID().uuidString)", isDirectory: true)
+        let stateStore = LinuxPodStateStore(root: root)
+        let plan = SamplePlans.publicImageSmoke(project: ProjectName("Stage8D Pod"))
+        let bootLog = stateStore.podMarkerPath(project: plan.project)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: bootLog.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("previous pod boot\n".utf8).write(to: bootLog)
+
+        let result = try LinuxPodBackend(stateStore: stateStore)
+            .renderDryRun(command: .up, plan: plan, options: RuntimeOptions())
+
+        let createRuntime = try XCTUnwrap(result.actions.first { $0.kind == .createProjectRuntime })
+        XCTAssertEqual(createRuntime.metadata["podMarker"], bootLog.path)
+        XCTAssertEqual(createRuntime.metadata["podLifecycle"], "reuse")
+        XCTAssertEqual(createRuntime.metadata["hotplugPolicy"], "reuse-existing-pod-or-register-before-create")
+
+        let addContainer = try XCTUnwrap(result.actions.first { $0.kind == .addContainer })
+        XCTAssertEqual(addContainer.metadata["podAttachment"], "hotplug-or-reuse")
+    }
+
     func testLinuxPodExecutionRequiresExplicitApproval() async throws {
         let backend = LinuxPodBackend()
         let plan = SamplePlans.publicImageSmoke(project: ProjectName("Needs Approval"))

@@ -52,10 +52,20 @@ public struct LinuxPodStateStore: Sendable {
             .appendingPathComponent("\(cacheKey(for: identifier)).ext4")
     }
 
+    public func podMarkerPath(project: ProjectName) -> URL {
+        runtimeDirectory(for: project)
+            .appendingPathComponent("boot.log")
+    }
+
     public func volumePath(project: ProjectName, volume: VolumePlan) -> URL {
         projectDirectory(for: project)
             .appendingPathComponent("volumes", isDirectory: true)
             .appendingPathComponent(volume.name, isDirectory: true)
+    }
+
+    public func volumeImagePath(project: ProjectName, volume: VolumePlan) -> URL {
+        volumePath(project: project, volume: volume)
+            .appendingPathComponent("volume.ext4")
     }
 
     public func removeEmptyProjectDirectories(project: ProjectName) throws {
@@ -169,6 +179,7 @@ public struct LinuxPodBackend: RuntimeBackend {
             guard action.kind != .reportDiagnostic else {
                 continue
             }
+            let started = Date()
             let actionResult = try await runtimeExecutor.execute(
                 LinuxPodRuntimeEvent(
                     project: dryRun.project,
@@ -177,7 +188,17 @@ public struct LinuxPodBackend: RuntimeBackend {
                     volume: volume(for: action, in: plan)
                 )
             )
-            actionResults.append(actionResult)
+            var metadata = actionResult.metadata
+            metadata["durationSeconds"] = String(format: "%.6f", Date().timeIntervalSince(started))
+            actionResults.append(
+                RuntimeActionResult(
+                    order: actionResult.order,
+                    kind: actionResult.kind,
+                    resourceName: actionResult.resourceName,
+                    status: actionResult.status,
+                    metadata: metadata
+                )
+            )
         }
         return ExecutionResult(
             backend: kind,
@@ -260,9 +281,9 @@ public struct LinuxPodBackend: RuntimeBackend {
             builder.append(
                 kind: .createNamedVolume,
                 resourceName: volume.name,
-                description: "Map Compose named volume \(volume.name) to adapter-owned state.",
+                description: "Create or reuse Compose named volume \(volume.name) in adapter-owned state.",
                 mutatesRuntime: true,
-                metadata: ["path": stateStore.volumePath(project: plan.project, volume: volume).path]
+                metadata: volumeMetadata(volume, plan: plan)
             )
         }
 
@@ -340,9 +361,9 @@ public struct LinuxPodBackend: RuntimeBackend {
             builder.append(
                 kind: .createNamedVolume,
                 resourceName: volume.name,
-                description: "Map Compose named volume \(volume.name) to adapter-owned state.",
+                description: "Create or reuse Compose named volume \(volume.name) in adapter-owned state.",
                 mutatesRuntime: true,
-                metadata: ["path": stateStore.volumePath(project: plan.project, volume: volume).path]
+                metadata: volumeMetadata(volume, plan: plan)
             )
         }
 
@@ -396,12 +417,16 @@ public struct LinuxPodBackend: RuntimeBackend {
     }
 
     private func projectRuntimeMetadata(_ plan: RuntimePlan) -> [String: String] {
-        [
+        let podMarker = stateStore.podMarkerPath(project: plan.project)
+        return [
             "state": stateStore.runtimeDirectory(for: plan.project).path,
             "hosts": serviceHostsMetadata(plan),
             "initfs": stateStore.initfsPath(project: plan.project).path,
             "initfsCache": stateStore.initfsCachePath().path,
-            "initfsCacheStatus": cacheStatus(stateStore.initfsCachePath())
+            "initfsCacheStatus": cacheStatus(stateStore.initfsCachePath()),
+            "podMarker": podMarker.path,
+            "podLifecycle": FileManager.default.fileExists(atPath: podMarker.path) ? "reuse" : "create",
+            "hotplugPolicy": "reuse-existing-pod-or-register-before-create"
         ]
     }
 
@@ -426,6 +451,17 @@ public struct LinuxPodBackend: RuntimeBackend {
                 ]
             )
         }
+    }
+
+    private func volumeMetadata(_ volume: VolumePlan, plan: RuntimePlan) -> [String: String] {
+        let volumePath = stateStore.volumePath(project: plan.project, volume: volume)
+        let volumeImage = stateStore.volumeImagePath(project: plan.project, volume: volume)
+        return [
+            "path": volumePath.path,
+            "volumeImage": volumeImage.path,
+            "volumeLifecycle": FileManager.default.fileExists(atPath: volumeImage.path) ? "reuse" : "create",
+            "preserveByDefault": "\(volume.preserveByDefault)"
+        ]
     }
 
     private func appendDownActions(
@@ -469,7 +505,8 @@ public struct LinuxPodBackend: RuntimeBackend {
         var metadata: [String: String] = [
             "hosts": serviceHostsMetadata(plan),
             "image": service.image,
-            "process": service.command.isEmpty ? "image-defaults" : "explicit-command"
+            "process": service.command.isEmpty ? "image-defaults" : "explicit-command",
+            "podAttachment": "hotplug-or-reuse"
         ]
         if !service.command.isEmpty {
             metadata["command"] = service.command.joined(separator: " ")

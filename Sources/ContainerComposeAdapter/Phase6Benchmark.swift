@@ -491,6 +491,10 @@ public struct Stage8BenchmarkEvidenceValidator: Sendable {
         for record in records {
             validate(record, diagnostics: &diagnostics)
         }
+        if records.contains(where: Self.isWarmReusePreservedCleanup)
+            && !records.contains(where: Self.isCleanFinalCleanup) {
+            diagnostics.append(blocking("stage8-final-cleanup-missing", "Stage 8 warm-reuse evidence must include a final clean cleanup proof."))
+        }
         return diagnostics
     }
 
@@ -581,12 +585,38 @@ public struct Stage8BenchmarkEvidenceValidator: Sendable {
         if record.dataFootprintBytes == nil {
             diagnostics.append(blocking("stage8-data-footprint-missing", "Stage 8 records must preserve data footprint."))
         }
+        if Self.isWarmReusePreservedCleanup(record) {
+            return
+        }
         if record.cleanupResult != "clean" || record.cleanupStateDirectoryExistsAfterCleanup {
             diagnostics.append(blocking("stage8-cleanup-leftovers", "Stage 8 cleanup proof must show no adapter-owned project runtime leftovers."))
         }
     }
 
     private static let validLifecycleModeIDs = Set(BenchmarkLifecycleMode.allCases.map(\.id))
+
+    private static func isWarmReusePreservedCleanup(_ record: Phase6BenchmarkIterationRecord) -> Bool {
+        guard record.cleanupResult == "preserved-volume-for-warm-reuse"
+            || record.cleanupResult == "preserved-project-runtime-for-warm-reuse",
+            record.cleanupStateDirectoryExistsAfterCleanup,
+            let lifecycleMode = record.environment?.lifecycleMode,
+            let mode = BenchmarkLifecycleMode(rawValue: lifecycleMode) else {
+            return false
+        }
+        switch mode {
+        case .warmPreservedVolume, .persistentPodHotplug, .allWarmProjectRuntime:
+            return true
+        case .coldRuntime,
+             .imageStoreSeededFreshRuntime,
+             .rootfsCacheHitRuntime,
+             .initfsCacheHitRuntime:
+            return false
+        }
+    }
+
+    private static func isCleanFinalCleanup(_ record: Phase6BenchmarkIterationRecord) -> Bool {
+        record.cleanupResult == "clean" && !record.cleanupStateDirectoryExistsAfterCleanup
+    }
 }
 
 private func blocking(_ code: String, _ message: String) -> Diagnostic {

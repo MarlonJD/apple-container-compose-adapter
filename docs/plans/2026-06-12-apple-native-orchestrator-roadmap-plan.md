@@ -241,7 +241,10 @@ Status: in progress. Stage 8A instrumentation/classification is complete; see
 `docs/plans/notes/2026-06-12-stage-8a-instrumentation-classification.md`.
 Stage 8B rootfs/initfs cache code is complete; see
 `docs/plans/notes/2026-06-12-stage-8b-rootfs-initfs-cache-slice.md`.
-Signed runtime validation remains the next approval-gated task.
+Stage 8C-8E warm volume, persistent pod/hotplug, and all-warm benchmark
+policy code is complete; see
+`docs/plans/notes/2026-06-12-stage-8c-8d-8e-warm-runtime-slice.md`.
+Signed E/F/G runtime validation remains the next approval-gated task.
 
 Prepare:
 
