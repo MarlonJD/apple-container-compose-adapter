@@ -47,12 +47,16 @@ Already prepared:
 
 Most recent completed implementation task:
 
-- [Compose Frontend To LocalDevProject Plan](completed/2026-06-12-compose-frontend-localdevproject-plan.md).
+- Stage 5 fixture-derived backend-shaped no-runtime dry-run evidence for
+  Postgres, `db-data`, migrate and seed jobs, API service, readiness,
+  logs/status/run, deterministic ports, managed hosts, and planned cleanup.
+  Runtime evidence remains approval-gated.
 
 Next roadmap task:
 
-- Create or execute the Stage 2 AppleNativePlanner compatibility contract only
-  after an explicit task asks for it.
+- Stage 5 runtime smoke: request explicit current-task runtime approval for
+  one signed backend-shaped fixture smoke, then run it only if approval is
+  granted and retain cleanup proof.
 
 ## Roadmap Summary
 
@@ -330,11 +334,11 @@ Use this prompt to continue from the roadmap:
 ```text
 You are working in MarlonJD/apple-container-compose-adapter at /Users/marlonjd/Developer/monorepos/emsi_monorepo/tools/apple-container-compose-adapter.
 
-Use docs/plans/2026-06-12-apple-native-orchestrator-roadmap-plan.md as the roadmap. Stage 1, the ComposeFrontend -> LocalDevProject -> RuntimePlan dry-run slice, is completed and archived at docs/plans/completed/2026-06-12-compose-frontend-localdevproject-plan.md.
+Use docs/plans/2026-06-12-apple-native-orchestrator-roadmap-plan.md as the roadmap. Stage 1 through Stage 4 are complete or documented in the plan indexes. Stage 5 now has fixture-derived no-runtime dry-run evidence at docs/evidence/linuxpod-stage5-backend-smoke/20260612T093000Z-stage5-backend-smoke-dry-run.jsonl and the runtime evidence gap note at docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md.
 
-Prepare the next gated roadmap step only: create or execute a Stage 2 AppleNativePlanner compatibility contract plan after reading AGENTS.md, README.md, docs/apple-native-local-dev-orchestrator.md, docs/localdevproject-ir.md, docs/benchmark-and-metrics-plan.md, docs/plans/index.md, Sources/ContainerComposeAdapter/ComposeFrontend.swift, Sources/ContainerComposeAdapter/LocalDevProject.swift, Sources/ContainerComposeAdapter/SamplePlans.swift, and the relevant tests.
+Prepare the next gated Stage 5 step only: request explicit current-task approval before any runtime mutation. If approval is not provided, do not run runtime mutation and keep docs/plans/index.md pointing at the Stage 5 runtime-smoke approval gate. If approval is granted, run exactly one signed LinuxPod backend-shaped fixture runtime smoke using the fixture-derived path, capture runtime execution JSONL and cleanup proof, verify zero adapter-owned runtime/port/log/metrics leftovers except intended preserved cache state, and update docs/plans/index.md plus docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md with the actual result.
 
-Keep runtime mutation, Kubernetes parsing, persistent LinuxPod hotplug, rootfs-cache optimization, writable layers, Docker-compatible backends, registry login, host DNS mutation, and product benchmarks out of scope unless a new explicit task approves one of those surfaces.
+Keep Kubernetes parsing, persistent LinuxPod hotplug beyond the single smoke, rootfs-cache optimization, writable layers, Docker-compatible backends, registry login, host DNS mutation, repeated cold/warm product benchmarks, and replacement claims out of scope unless a new explicit task approves one of those surfaces.
 
-Verification required for planning-only changes: git diff --check. Verification required for implementation changes: swift test, git diff --check, targeted tests for the affected planner contract, and docs/plans/index.md updated to the actual final state. Do not create/switch branches. Commit and push child repo changes before any parent submodule pointer update, and do not update the parent unless explicitly asked.
+Verification required before any runtime request: swift test, git diff --check, and Stage 5 dry-run evidence validation. Verification required after an approved runtime smoke: focused Stage 5 tests, runtime JSONL validation, cleanup proof inspection, full swift test, git diff --check, and docs/plans/index.md updated to the actual final state. Do not create/switch branches. Commit and push child repo changes before any parent submodule pointer update, and do not update the parent unless explicitly asked.
 ```

@@ -48,6 +48,46 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(doc.contains("production Kubernetes conformance"))
     }
 
+    func testStage4CloseoutAdvancesRoadmapAndDocumentsRuntimeEvidenceGap() throws {
+        let activeIndex = try readText("docs/plans/index.md")
+        let notesIndex = try readText("docs/plans/notes/index.md")
+        let note = try readText("docs/plans/notes/2026-06-12-stage-4-microbenchmark-closeout.md")
+
+        XCTAssertTrue(activeIndex.contains("Stage 5 Backend-shaped Product Smoke"))
+        XCTAssertFalse(activeIndex.contains("Stop before implementing or running a concrete Stage 4"))
+        XCTAssertTrue(notesIndex.contains("2026-06-12-stage-4-microbenchmark-closeout.md"))
+
+        XCTAssertTrue(note.contains("## Completion Criteria"))
+        XCTAssertTrue(note.contains("rootfs"))
+        XCTAssertTrue(note.contains("named volume"))
+        XCTAssertTrue(note.contains("healthcheck"))
+        XCTAssertTrue(note.contains("dry-run/evidence schema"))
+        XCTAssertTrue(note.contains("cleanup proof"))
+        XCTAssertTrue(note.contains("## Runtime Evidence Gap"))
+        XCTAssertTrue(note.contains("No signed runtime microbenchmark was run"))
+    }
+
+    func testStage5DryRunEvidenceKeepsRuntimeSmokeAsNextTodo() throws {
+        let activeIndex = try readText("docs/plans/index.md")
+        let notesIndex = try readText("docs/plans/notes/index.md")
+        let note = try readText("docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md")
+
+        XCTAssertTrue(activeIndex.contains("Stage 5 runtime smoke: request explicit runtime approval"))
+        XCTAssertTrue(activeIndex.contains("20260612T093000Z-stage5-backend-smoke-dry-run.jsonl"))
+        XCTAssertTrue(notesIndex.contains("2026-06-12-stage-5-backend-smoke-evidence.md"))
+
+        XCTAssertTrue(note.contains("## Dry-run Evidence"))
+        XCTAssertTrue(note.contains("Postgres"))
+        XCTAssertTrue(note.contains("db-data"))
+        XCTAssertTrue(note.contains("migrate"))
+        XCTAssertTrue(note.contains("seed"))
+        XCTAssertTrue(note.contains("API service"))
+        XCTAssertTrue(note.contains("logs/status/run"))
+        XCTAssertTrue(note.contains("service DNS/managed hosts"))
+        XCTAssertTrue(note.contains("## Runtime Evidence Gap"))
+        XCTAssertTrue(note.contains("No signed Stage 5 runtime smoke was run"))
+    }
+
     private func readText(_ relativePath: String) throws -> String {
         let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(relativePath)

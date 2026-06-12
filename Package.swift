@@ -25,6 +25,14 @@ let package = Package(
         .executable(
             name: "container-compose-phase6-benchmark",
             targets: ["ContainerComposeAdapterPhase6Benchmark"]
+        ),
+        .executable(
+            name: "container-compose-stage4-microbenchmarks",
+            targets: ["ContainerComposeAdapterStage4Microbenchmarks"]
+        ),
+        .executable(
+            name: "container-compose-stage5-backend-smoke",
+            targets: ["ContainerComposeAdapterStage5BackendSmoke"]
         )
     ],
     dependencies: [
@@ -62,6 +70,14 @@ let package = Package(
                 "ContainerComposeAdapter",
                 "ContainerComposeAdapterLinuxPod"
             ]
+        ),
+        .executableTarget(
+            name: "ContainerComposeAdapterStage4Microbenchmarks",
+            dependencies: ["ContainerComposeAdapter"]
+        ),
+        .executableTarget(
+            name: "ContainerComposeAdapterStage5BackendSmoke",
+            dependencies: ["ContainerComposeAdapter"]
         ),
         .testTarget(
             name: "ContainerComposeAdapterTests",

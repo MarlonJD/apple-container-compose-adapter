@@ -171,6 +171,69 @@ exit codes, captured log summaries, cleanup actions, and status metadata when
 the selected backend provides them. Use `--format json` for the machine-readable
 execution result.
 
+## Stage 4 Microbenchmark Plan
+
+Emit the Stage 4 rootfs, named-volume, and healthcheck microbenchmark plan as
+JSONL without creating runtime, cache, or project state:
+
+```bash
+swift run container-compose-stage4-microbenchmarks \
+  --compose-file docs/evidence/fixtures/backend-shaped/compose.yaml \
+  --project-name backend-shaped \
+  --evidence-jsonl docs/evidence/linuxpod-stage4-microbenchmarks/stage4-plan.jsonl \
+  --operation-evidence-jsonl docs/evidence/linuxpod-stage4-microbenchmarks/stage4-operations.jsonl \
+  --validate-evidence
+```
+
+This command records only the no-runtime plan shape. Actual rootfs, volume, or
+healthcheck measurement is runtime-mutating work and still requires explicit
+current-task approval before it can run.
+
+The core library also defines the Stage 4 measurement JSONL record and
+approval-gated runner path. `LinuxPodStage4MicrobenchmarkRunner` translates
+rootfs, volume, and healthcheck probes into scoped measurement operations and
+wraps an injected operation executor's result as measurement JSONL. It can also
+render the approval-gated measurement operations that a future runtime executor
+would execute, including mutation scope and cleanup expectations, without
+running them. `Stage4MicrobenchmarkEvidenceValidator` validates no-runtime plan
+and operation evidence shape, approval requirements, mutation scope, global
+mutation safety, cleanup expectations, required rootfs/volume/healthcheck probe
+coverage, and probe identity fields; the command can run that validator with
+`--validate-evidence`. The same validator also checks future measurement JSONL
+against the planned probes, required cold/warm metadata, image cache hit/miss
+for image-backed probes, initfs/kernel/vminit runtime context, planned runtime
+target name, timing, block I/O, guest cgroup metrics, cleanup result, and
+structured cleanup proof with stale-state counts, rootfs cache state, initfs
+cache-state consistency, named-volume lifecycle state, matching
+`apple/containerization` metadata, and blocked host-memory attribution. No
+concrete runtime operation executor is configured by default.
+When runtime-approved measurements exist, pass
+`--measurement-evidence-jsonl <path>` together with `--validate-evidence` to
+validate the measurement JSONL against the emitted plan. The measurement flag is
+validation-only; the Stage 4 command rejects it without `--validate-evidence`
+and never treats it as approval to run measurements.
+
+## Stage 5 Backend-shaped Smoke Dry Run
+
+Emit the Stage 5 backend-shaped product-smoke evidence from the public Compose
+fixture without creating, starting, stopping, or deleting runtime resources:
+
+```bash
+swift run container-compose-stage5-backend-smoke \
+  --compose-file docs/evidence/fixtures/backend-shaped/compose.yaml \
+  --project-name backend-shaped \
+  --evidence-jsonl docs/evidence/linuxpod-stage5-backend-smoke/stage5-dry-run.jsonl \
+  --validate-evidence
+```
+
+The command renders and validates the fixture-derived LinuxPod dry-run surfaces
+for `up`, `logs`, `status`, `run`, and `down --volumes`. The JSONL record covers
+Postgres, the `db-data` named volume, migrate and seed jobs, the API service,
+service readiness/healthchecks, deterministic host ports, adapter-managed
+service hosts, and cleanup proof. This command is no-runtime only and rejects
+runtime approval tokens; a signed Stage 5 runtime smoke is a separate
+current-task approval-gated action.
+
 ## Phase 6 Benchmark Harness
 
 The Phase 6 backend-shaped LinuxPod benchmark uses a signed executable so the

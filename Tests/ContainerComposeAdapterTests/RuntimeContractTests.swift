@@ -377,6 +377,133 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(store.requiredProjectSubdirectories(for: project).map(\.lastPathComponent).contains("ports"))
     }
 
+    func testProjectRuntimeStoreRejectsProjectsRootAndOutsidePathsForCleanup() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-runtime-store-containment-\(UUID().uuidString)", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: root)
+        let outside = root.deletingLastPathComponent()
+            .appendingPathComponent("outside-cca-runtime-store-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        try FileManager.default.createDirectory(at: store.projectsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: store.projectsDirectory.appendingPathComponent(ProjectRuntimeStore.sentinelFileName).path,
+            contents: Data()
+        )
+        FileManager.default.createFile(
+            atPath: outside.appendingPathComponent(ProjectRuntimeStore.sentinelFileName).path,
+            contents: Data()
+        )
+
+        XCTAssertThrowsError(try store.validateAdapterOwnedProjectDirectory(store.projectsDirectory)) { error in
+            XCTAssertEqual(
+                error as? RuntimeBackendError,
+                .runtimeUnavailable("Refusing cleanup for \(store.projectsDirectory.path) because it is not a project directory under \(store.projectsDirectory.path).")
+            )
+        }
+        XCTAssertThrowsError(try store.validateAdapterOwnedProjectDirectory(outside)) { error in
+            XCTAssertEqual(
+                error as? RuntimeBackendError,
+                .runtimeUnavailable("Refusing cleanup for \(outside.path) because it is outside \(store.projectsDirectory.path).")
+            )
+        }
+    }
+
+    func testProjectSessionPlanSeparatesProjectRuntimeStateFromReusableCacheState() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-session-plan-\(UUID().uuidString)", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: root)
+        let project = LocalDevProject(
+            id: "demo-stack",
+            name: "Demo Display",
+            services: [
+                LocalDevService(name: "api", image: "mirror.gcr.io/library/python:3.12-alpine")
+            ],
+            volumes: [
+                LocalDevVolume(name: "db-data")
+            ]
+        )
+
+        let session = ProjectSessionManager(store: store).planSession(for: project)
+
+        XCTAssertEqual(session.lifecycle, .persistentLinuxPod)
+        XCTAssertEqual(session.localDevProjectID, "demo-stack")
+        XCTAssertEqual(session.runtimeResourceName, "cca-linuxpod-demo-stack")
+        XCTAssertTrue(session.paths.projectDirectory.hasSuffix("/projects/demo-stack"))
+        XCTAssertTrue(session.paths.sentinelFile.hasSuffix("/projects/demo-stack/.container-compose-adapter-owned"))
+        XCTAssertTrue(session.paths.projectStorageFile.hasSuffix("/projects/demo-stack/project-storage.ext4"))
+        XCTAssertTrue(session.paths.runtimeStateDirectories.values.allSatisfy { path in
+            path.hasPrefix(session.paths.projectDirectory + "/")
+        })
+        XCTAssertTrue(session.paths.reusableCacheDirectories.values.allSatisfy { path in
+            path.hasPrefix(store.cacheDirectory.path + "/")
+        })
+        XCTAssertFalse(session.paths.reusableCacheDirectories.values.contains { path in
+            path.hasPrefix(session.paths.projectDirectory + "/")
+        })
+        XCTAssertEqual(session.paths.volumeDirectories["db-data"], session.paths.projectDirectory + "/volumes/db-data")
+        XCTAssertTrue(store.isProjectRuntimePath(URL(fileURLWithPath: session.paths.runtimeStateDirectories["logs"] ?? "")))
+        XCTAssertFalse(store.isProjectRuntimePath(store.cacheDirectory))
+        XCTAssertTrue(store.isReusableCachePath(store.rootfsCacheURL(imageReference: "mirror.gcr.io/library/python:3.12-alpine")))
+        XCTAssertFalse(store.isReusableCachePath(URL(fileURLWithPath: session.paths.volumeDirectories["db-data"] ?? "")))
+    }
+
+    func testDryRunCleanupProofCoversRuntimeVolumesPortsLogsMetricsAndCache() throws {
+        let dryRun = try LinuxPodBackend().renderDryRun(
+            command: .down,
+            plan: SamplePlans.publicImageSmoke(project: ProjectName("Cleanup Proof")),
+            options: RuntimeOptions(includeVolumes: true)
+        )
+
+        let evidence = DryRunEvidenceRecord(timestamp: "2026-06-12T00:00:00.000Z", dryRun: dryRun)
+
+        XCTAssertEqual(evidence.cleanupProof.runtimeMutation, "not-run")
+        XCTAssertEqual(evidence.cleanupProof.runtimeCleanup, "planned-only")
+        XCTAssertEqual(evidence.cleanupProof.volumeCleanup, "planned-only")
+        XCTAssertEqual(evidence.cleanupProof.portCleanup, "planned-release")
+        XCTAssertEqual(evidence.cleanupProof.logCleanup, "planned-runtime-state-cleanup")
+        XCTAssertEqual(evidence.cleanupProof.metricsCleanup, "planned-runtime-state-cleanup")
+        XCTAssertEqual(evidence.cleanupProof.cacheCleanup, "preserved")
+        XCTAssertEqual(evidence.cleanupProof.globalCleanup, "not-run")
+        XCTAssertTrue(evidence.cleanupProof.renderText().contains("cache cleanup: preserved"))
+    }
+
+    func testProjectSessionDryRunPlanningDoesNotCreateRuntimeOrCacheDirectories() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-session-dry-run-\(UUID().uuidString)", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: root)
+        let project = LocalDevProject(
+            id: "dry-run",
+            name: "Dry Run",
+            services: [
+                LocalDevService(name: "web", image: "mirror.gcr.io/library/nginx:alpine")
+            ]
+        )
+        let session = ProjectSessionManager(store: store).planSession(for: project)
+        let backend = LinuxPodBackend(
+            stateStore: LinuxPodStateStore(root: root.appendingPathComponent("legacy-linuxpod-state", isDirectory: true))
+        )
+
+        let dryRun = try backend.renderDryRun(
+            command: .up,
+            plan: AppleNativePlanner().plan(project).runtimePlan,
+            options: RuntimeOptions()
+        )
+        let evidence = DryRunEvidenceRecord(timestamp: "2026-06-12T00:00:00.000Z", dryRun: dryRun)
+
+        XCTAssertTrue(dryRun.approvalRequired)
+        XCTAssertGreaterThan(dryRun.mutatingActionCount, 0)
+        XCTAssertEqual(evidence.status, "planned-dry-run-no-runtime-mutation")
+        XCTAssertEqual(evidence.cleanupProof.runtimeMutation, "not-run")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: session.paths.projectDirectory))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: session.paths.reusableCacheDirectories["rootfs-by-digest"] ?? ""))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+    }
+
     func testRuntimeLogCaptureSummarizesStdoutAndStderrForEvidence() {
         let capture = RuntimeLogCapture()
 
@@ -525,6 +652,1283 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(summary.upDurationP50Seconds, 12.25)
     }
 
+    func testStage4MicrobenchmarkPlanCoversRootfsVolumeAndHealthcheckWithoutRuntimeMutation() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-microbenchmarks-\(UUID().uuidString)", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: root)
+        let project = try ComposeFrontend()
+            .parseProject(fileURL: fixtureURL("backend-shaped/compose.yaml"), projectName: "backend-shaped")
+            .project
+
+        let record = Stage4MicrobenchmarkPlanner(store: store).plan(
+            project: project,
+            timestamp: "2026-06-12T08:00:00Z"
+        )
+
+        XCTAssertEqual(record.schemaVersion, Stage4MicrobenchmarkSchema.version)
+        XCTAssertEqual(record.recordType, Stage4MicrobenchmarkSchema.planRecordType)
+        XCTAssertEqual(record.status, "planned-dry-run-no-runtime-mutation")
+        XCTAssertEqual(record.projectID, "backend-shaped")
+        XCTAssertEqual(record.runtimeResourceName, "cca-linuxpod-backend-shaped")
+        XCTAssertEqual(record.hostPhysicalMemoryStatus, .blocked)
+        XCTAssertEqual(record.cleanupExpectation.cacheCleanup, "preserved")
+        XCTAssertEqual(record.cleanupExpectation.volumeCleanup, "preserved-by-default")
+
+        XCTAssertTrue(record.probes.allSatisfy { probe in
+            probe.runtimeMutation == "not-run" && probe.requiresRuntimeApprovalToMeasure
+        })
+        XCTAssertEqual(
+            Set(record.probes.map(\.kind)),
+            [
+                .rootfsUnpack,
+                .rootfsCopy,
+                .apfsClone,
+                .namedVolumeFresh,
+                .namedVolumeWarm,
+                .healthcheckExec
+            ]
+        )
+
+        let rootfsUnpackProbes = record.probes.filter { $0.kind == .rootfsUnpack }
+        XCTAssertEqual(
+            rootfsUnpackProbes.map(\.imageReference).sorted(),
+            [
+                "docker.io/library/postgres:16-alpine",
+                "docker.io/library/python:3.12-alpine"
+            ]
+        )
+        XCTAssertTrue(rootfsUnpackProbes.allSatisfy { probe in
+            probe.cacheKeyKind == .imageReferencePendingDigest
+                && probe.targetPath.contains("/cache/rootfs-by-digest/")
+                && probe.expectedMetrics.contains("rootfs_prep_seconds")
+                && probe.expectedMetrics.contains("block_read_bytes")
+        })
+
+        let volumeProbes = record.probes.filter { $0.kind == .namedVolumeFresh || $0.kind == .namedVolumeWarm }
+        XCTAssertEqual(Set(volumeProbes.map(\.volumeName)), ["db-data"])
+        XCTAssertTrue(volumeProbes.allSatisfy { probe in
+            probe.targetPath.hasSuffix("/projects/backend-shaped/volumes/db-data")
+                && probe.expectedMetrics.contains("volume_setup_seconds")
+                && probe.expectedMetrics.contains("block_write_bytes")
+        })
+
+        let healthcheckProbes = record.probes.filter { $0.kind == .healthcheckExec }
+        XCTAssertEqual(Set(healthcheckProbes.map(\.serviceName)), ["api", "db"])
+        XCTAssertTrue(healthcheckProbes.allSatisfy { probe in
+            probe.expectedMetrics.contains("healthcheck_exec_seconds")
+                && probe.expectedMetrics.contains("healthcheck_attempts")
+        })
+
+        let encoded = try JSONEncoder().encode(record)
+        let decoded = try JSONDecoder().decode(Stage4MicrobenchmarkPlanRecord.self, from: encoded)
+        XCTAssertEqual(decoded, record)
+        let json = String(decoding: encoded, as: UTF8.self)
+        XCTAssertTrue(json.contains("\"record_type\":\"linuxpod-stage4-microbenchmark-plan\""))
+        XCTAssertTrue(json.contains("\"host_physical_memory_status\":\"blocked\""))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    func testStage4MicrobenchmarkOperationPlanRendersApprovalGatedActionsWithoutRuntimeMutation() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-operation-plan-\(UUID().uuidString)", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: root)
+        let project = try ComposeFrontend()
+            .parseProject(fileURL: fixtureURL("backend-shaped/compose.yaml"), projectName: "backend-shaped")
+            .project
+        let record = Stage4MicrobenchmarkPlanner(store: store).plan(
+            project: project,
+            timestamp: "2026-06-12T09:00:00Z"
+        )
+
+        let operations = Stage4MicrobenchmarkOperationPlanner().planOperations(for: record)
+
+        XCTAssertEqual(operations.count, record.probes.count)
+        XCTAssertTrue(operations.allSatisfy { operation in
+            operation.schemaVersion == Stage4MicrobenchmarkSchema.version
+                && operation.recordType == Stage4MicrobenchmarkSchema.operationRecordType
+                && operation.timestamp == record.timestamp
+                && operation.projectID == record.projectID
+                && operation.runtimeResourceName == record.runtimeResourceName
+                && operation.runtimeMutation == "planned-not-run"
+                && operation.requiresRuntimeApproval
+                && !operation.mutatesGlobalState
+        })
+        let rootfsUnpack = try XCTUnwrap(operations.first { $0.kind == .rootfsUnpack })
+        XCTAssertEqual(rootfsUnpack.mutationScope, .reusableCache)
+        XCTAssertEqual(rootfsUnpack.cleanupExpectation, "preserve-reusable-cache")
+        XCTAssertTrue(rootfsUnpack.targetPath.contains("/cache/rootfs-by-digest/"))
+
+        let rootfsCopy = try XCTUnwrap(operations.first { $0.kind == .rootfsCopy })
+        XCTAssertEqual(rootfsCopy.mutationScope, .projectRuntimeState)
+        XCTAssertEqual(rootfsCopy.cleanupExpectation, "remove-project-runtime-copy")
+
+        let apfsClone = try XCTUnwrap(operations.first { $0.kind == .apfsClone })
+        XCTAssertEqual(apfsClone.mutationScope, .projectRuntimeState)
+        XCTAssertEqual(apfsClone.cleanupExpectation, "remove-project-runtime-clone")
+
+        let namedVolumeFresh = try XCTUnwrap(operations.first { $0.kind == .namedVolumeFresh })
+        XCTAssertEqual(namedVolumeFresh.mutationScope, .projectNamedVolume)
+        XCTAssertEqual(namedVolumeFresh.cleanupExpectation, "preserve-named-volume-by-default")
+
+        let healthcheck = try XCTUnwrap(operations.first { $0.kind == .healthcheckExec && $0.serviceName == "api" })
+        XCTAssertEqual(healthcheck.mutationScope, .runtimeExec)
+        XCTAssertEqual(healthcheck.command, [
+            "sh",
+            "-ec",
+            "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2).read()\""
+        ])
+        XCTAssertEqual(healthcheck.cleanupExpectation, "remove-metrics-only")
+
+        let encoded = try JSONEncoder().encode(rootfsUnpack)
+        let decoded = try JSONDecoder().decode(Stage4MicrobenchmarkOperation.self, from: encoded)
+        XCTAssertEqual(decoded, rootfsUnpack)
+        let json = String(decoding: encoded, as: UTF8.self)
+        XCTAssertTrue(json.contains("\"runtime_mutation\":\"planned-not-run\""))
+        XCTAssertTrue(json.contains("\"mutates_global_state\":false"))
+        XCTAssertTrue(json.contains("\"record_type\":\"linuxpod-stage4-microbenchmark-operation\""))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorAcceptsPlanAndOperationEvidence() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:05:00Z")
+        let operations = Stage4MicrobenchmarkOperationPlanner().planOperations(for: record)
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            operations: operations
+        )
+
+        XCTAssertEqual(diagnostics, [])
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsIncompleteOrMalformedPlanEvidence() throws {
+        let validRecord = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:05:30Z")
+        let malformedPlan = Stage4MicrobenchmarkPlanRecord(
+            timestamp: "2026-06-12T09:05:31Z",
+            projectID: validRecord.projectID,
+            displayName: validRecord.displayName,
+            runtimeResourceName: validRecord.runtimeResourceName,
+            probes: [
+                Stage4MicrobenchmarkProbe(
+                    probeID: "rootfs-unpack-invalid",
+                    kind: .rootfsUnpack,
+                    coldOrWarm: BenchmarkLifecycle.cold.rawValue,
+                    imageReference: "",
+                    targetPath: "/tmp/project-rootfs.ext4",
+                    cacheKeyKind: .notApplicable,
+                    expectedMetrics: ["rootfs_prep_seconds"]
+                )
+            ]
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(plan: malformedPlan)
+
+        XCTAssertEqual(
+            Set(diagnostics.map(\.code)),
+            [
+                "stage4-plan-required-probes-missing",
+                "stage4-rootfs-image-missing",
+                "stage4-rootfs-cache-key-missing",
+                "stage4-rootfs-cache-path-missing"
+            ]
+        )
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorReadsPlanAndOperationJSONLFiles() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-file-validation-\(UUID().uuidString)", isDirectory: true)
+        let planURL = tempRoot.appendingPathComponent("stage4-plan.jsonl")
+        let operationURL = tempRoot.appendingPathComponent("stage4-operations.jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:07:00Z")
+        let operations = Stage4MicrobenchmarkOperationPlanner().planOperations(for: record)
+        let writer = Stage4MicrobenchmarkJSONLWriter()
+        try writer.append(record, to: planURL)
+        for operation in operations {
+            try writer.append(operation, to: operationURL)
+        }
+
+        let diagnostics = try Stage4MicrobenchmarkEvidenceValidator().validate(
+            planEvidenceURL: planURL,
+            operationEvidenceURL: operationURL
+        )
+
+        XCTAssertEqual(diagnostics, [])
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsUnsafeOrMismatchedOperationEvidence() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:06:00Z")
+        var operations = Stage4MicrobenchmarkOperationPlanner().planOperations(for: record)
+        let rootfsProbe = try XCTUnwrap(record.probes.first { $0.kind == .rootfsUnpack })
+        operations[0] = Stage4MicrobenchmarkOperation(
+            probe: rootfsProbe,
+            plan: record,
+            mutationScope: .runtimeExec,
+            cleanupExpectation: "delete-global-cache",
+            runtimeMutation: "executed",
+            requiresRuntimeApproval: false,
+            mutatesGlobalState: true
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            operations: operations
+        )
+
+        XCTAssertEqual(
+            Set(diagnostics.map(\.code)),
+            [
+                "stage4-operation-runtime-mutation-not-planned",
+                "stage4-operation-approval-missing",
+                "stage4-operation-global-mutation",
+                "stage4-operation-scope-mismatch",
+                "stage4-operation-cleanup-mismatch"
+            ]
+        )
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsOperationTargetMismatches() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:06:30Z")
+        var operations = Stage4MicrobenchmarkOperationPlanner().planOperations(for: record)
+        let plannedProbe = try XCTUnwrap(record.probes.first { $0.kind == .rootfsUnpack })
+        let mismatchedProbe = Stage4MicrobenchmarkProbe(
+            probeID: plannedProbe.probeID,
+            kind: plannedProbe.kind,
+            coldOrWarm: plannedProbe.coldOrWarm,
+            imageReference: "docker.io/library/busybox:latest",
+            targetPath: "/tmp/not-adapter-owned/rootfs",
+            cacheKeyKind: plannedProbe.cacheKeyKind,
+            expectedMetrics: plannedProbe.expectedMetrics
+        )
+        operations[0] = Stage4MicrobenchmarkOperation(
+            probe: mismatchedProbe,
+            plan: record,
+            mutationScope: .reusableCache,
+            cleanupExpectation: "preserve-reusable-cache"
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            operations: operations
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-operation-target-mismatch"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkPlanHarnessEmitsOperationEvidenceWithoutRuntimeMutation() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-operation-evidence-\(UUID().uuidString)", isDirectory: true)
+        let evidencePath = tempRoot.appendingPathComponent("stage4-operations.jsonl")
+        let storeRoot = tempRoot.appendingPathComponent("store", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let operations = try Stage4MicrobenchmarkPlanHarness(
+            store: ProjectRuntimeStore(baseDirectory: storeRoot)
+        ).emitOperationPlan(
+            composeFile: fixtureURL("backend-shaped/compose.yaml"),
+            projectName: "backend-shaped",
+            timestamp: "2026-06-12T09:10:00Z",
+            evidenceURL: evidencePath
+        )
+
+        XCTAssertEqual(operations.count, 10)
+        XCTAssertTrue(operations.allSatisfy { $0.runtimeMutation == "planned-not-run" && !$0.mutatesGlobalState })
+        let contents = try String(contentsOf: evidencePath, encoding: .utf8)
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        XCTAssertEqual(lines.count, operations.count + 1)
+        XCTAssertEqual(lines.last, "")
+        let decoded = try JSONDecoder().decode(
+            Stage4MicrobenchmarkOperation.self,
+            from: Data(String(lines[0]).utf8)
+        )
+        XCTAssertEqual(decoded, operations[0])
+        XCTAssertTrue(contents.contains("\"record_type\":\"linuxpod-stage4-microbenchmark-operation\""))
+        XCTAssertTrue(contents.contains("\"mutation_scope\":\"runtime-exec\""))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeRoot.path))
+    }
+
+    func testStage4MicrobenchmarkWriterAppendsDecodableJSONLWithoutRuntimeMutation() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-jsonl-\(UUID().uuidString)", isDirectory: true)
+        let evidencePath = tempRoot
+            .appendingPathComponent("nested", isDirectory: true)
+            .appendingPathComponent("stage4-plan.jsonl")
+        let storeRoot = tempRoot.appendingPathComponent("store", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: storeRoot)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        let project = try ComposeFrontend()
+            .parseProject(fileURL: fixtureURL("backend-shaped/compose.yaml"), projectName: "backend-shaped")
+            .project
+        let record = Stage4MicrobenchmarkPlanner(store: store).plan(
+            project: project,
+            timestamp: "2026-06-12T08:10:00Z"
+        )
+
+        try Stage4MicrobenchmarkJSONLWriter().append(record, to: evidencePath)
+
+        let contents = try String(contentsOf: evidencePath, encoding: .utf8)
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines.last, "")
+        let decoded = try JSONDecoder().decode(
+            Stage4MicrobenchmarkPlanRecord.self,
+            from: Data(String(lines[0]).utf8)
+        )
+        XCTAssertEqual(decoded, record)
+        XCTAssertTrue(contents.contains("\"record_type\":\"linuxpod-stage4-microbenchmark-plan\""))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeRoot.path))
+    }
+
+    func testStage4MicrobenchmarkPlanHarnessEmitsFixturePlanEvidenceWithoutRuntimeMutation() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-harness-\(UUID().uuidString)", isDirectory: true)
+        let evidencePath = tempRoot.appendingPathComponent("stage4-plan.jsonl")
+        let storeRoot = tempRoot.appendingPathComponent("store", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let record = try Stage4MicrobenchmarkPlanHarness(
+            store: ProjectRuntimeStore(baseDirectory: storeRoot)
+        ).emitPlan(
+            composeFile: fixtureURL("backend-shaped/compose.yaml"),
+            projectName: "backend-shaped",
+            timestamp: "2026-06-12T08:20:00Z",
+            evidenceURL: evidencePath
+        )
+
+        XCTAssertEqual(record.projectID, "backend-shaped")
+        XCTAssertEqual(record.recordType, Stage4MicrobenchmarkSchema.planRecordType)
+        XCTAssertEqual(record.probes.filter { $0.kind == .healthcheckExec }.map(\.serviceName).sorted(), ["api", "db"])
+        let contents = try String(contentsOf: evidencePath, encoding: .utf8)
+        let decoded = try JSONDecoder().decode(
+            Stage4MicrobenchmarkPlanRecord.self,
+            from: Data(contents.split(separator: "\n")[0].utf8)
+        )
+        XCTAssertEqual(decoded, record)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeRoot.path))
+    }
+
+    func testStage4MicrobenchmarkPlanCommandOptionsStayNoRuntimeOnly() throws {
+        let options = try Stage4MicrobenchmarkPlanCommandOptions.parse([
+            "--compose-file", "docs/evidence/fixtures/backend-shaped/compose.yaml",
+            "--project-name", "backend-shaped",
+            "--timestamp", "2026-06-12T08:30:00Z",
+            "--evidence-jsonl", "docs/evidence/linuxpod-stage4-microbenchmarks/plan.jsonl",
+            "--operation-evidence-jsonl", "docs/evidence/linuxpod-stage4-microbenchmarks/operations.jsonl",
+            "--measurement-evidence-jsonl", "docs/evidence/linuxpod-stage4-microbenchmarks/measurements.jsonl",
+            "--validate-evidence",
+            "--store-root", "/tmp/cca-stage4-store"
+        ])
+
+        XCTAssertEqual(options.composeFile.path, "docs/evidence/fixtures/backend-shaped/compose.yaml")
+        XCTAssertEqual(options.projectName, "backend-shaped")
+        XCTAssertEqual(options.timestamp, "2026-06-12T08:30:00Z")
+        XCTAssertEqual(options.evidenceJSONL.path, "docs/evidence/linuxpod-stage4-microbenchmarks/plan.jsonl")
+        XCTAssertEqual(options.operationEvidenceJSONL?.path, "docs/evidence/linuxpod-stage4-microbenchmarks/operations.jsonl")
+        XCTAssertEqual(options.measurementEvidenceJSONL?.path, "docs/evidence/linuxpod-stage4-microbenchmarks/measurements.jsonl")
+        XCTAssertTrue(options.validateEvidence)
+        XCTAssertEqual(options.storeRoot.path, "/tmp/cca-stage4-store")
+        XCTAssertThrowsError(
+            try Stage4MicrobenchmarkPlanCommandOptions.parse([
+                "--compose-file", "compose.yaml",
+                "--project-name", "demo",
+                "--evidence-jsonl", "plan.jsonl",
+                "--approval-token", LinuxPodBackend.runtimeApprovalToken
+            ])
+        )
+        XCTAssertThrowsError(
+            try Stage4MicrobenchmarkPlanCommandOptions.parse([
+                "--compose-file", "compose.yaml",
+                "--project-name", "demo",
+                "--evidence-jsonl", "plan.jsonl",
+                "--measurement-evidence-jsonl", "measurements.jsonl"
+            ])
+        ) { error in
+            XCTAssertEqual(error as? Stage4MicrobenchmarkPlanCommandError, .measurementEvidenceRequiresValidation)
+        }
+    }
+
+    func testStage4MicrobenchmarkPlanCommandRunnerValidatesMeasurementEvidenceFiles() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-command-runner-\(UUID().uuidString)", isDirectory: true)
+        let planURL = tempRoot.appendingPathComponent("stage4-plan.jsonl")
+        let operationURL = tempRoot.appendingPathComponent("stage4-operations.jsonl")
+        let measurementURL = tempRoot.appendingPathComponent("stage4-measurements.jsonl")
+        let storeRoot = tempRoot.appendingPathComponent("store", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        let timestamp = "2026-06-12T09:35:00Z"
+        let project = try ComposeFrontend()
+            .parseProject(fileURL: fixtureURL("backend-shaped/compose.yaml"), projectName: "backend-shaped")
+            .project
+        let expectedPlan = Stage4MicrobenchmarkPlanner(store: ProjectRuntimeStore(baseDirectory: storeRoot))
+            .plan(project: project, timestamp: timestamp)
+        let measurements = completeStage4Measurements(plan: expectedPlan, timestamp: "2026-06-12T09:36:00Z")
+        let writer = Stage4MicrobenchmarkJSONLWriter()
+        for measurement in measurements {
+            try writer.append(measurement, to: measurementURL)
+        }
+
+        let result = try Stage4MicrobenchmarkPlanCommandRunner().run(
+            options: Stage4MicrobenchmarkPlanCommandOptions(
+                composeFile: .init(fixtureURL("backend-shaped/compose.yaml").path),
+                projectName: "backend-shaped",
+                timestamp: timestamp,
+                evidenceJSONL: .init(planURL.path),
+                operationEvidenceJSONL: .init(operationURL.path),
+                measurementEvidenceJSONL: .init(measurementURL.path),
+                validateEvidence: true,
+                storeRoot: .init(storeRoot.path)
+            )
+        )
+
+        XCTAssertEqual(result.plan, expectedPlan)
+        XCTAssertEqual(result.operations.count, expectedPlan.probes.count)
+        XCTAssertEqual(result.validationDiagnostics, [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: planURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: operationURL.path))
+    }
+
+    func testStage4MicrobenchmarkPlanCommandValidationFailureDescriptionListsDiagnosticCodes() {
+        let error = Stage4MicrobenchmarkPlanCommandError.evidenceValidationFailed([
+            Diagnostic(
+                severity: .blocking,
+                code: "stage4-operation-global-mutation",
+                message: "bad"
+            )
+        ])
+
+        XCTAssertEqual(
+            error.description,
+            "Stage 4 evidence validation failed: stage4-operation-global-mutation."
+        )
+    }
+
+    func testStage4MicrobenchmarkExecutorRequiresApprovalBeforeMeasurement() async throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T08:40:00Z")
+
+        do {
+            _ = try await Stage4MicrobenchmarkExecutor().measure(plan: record, approval: RuntimeApproval())
+            XCTFail("Expected Stage 4 measurements to require approval.")
+        } catch let error as RuntimeBackendError {
+            XCTAssertEqual(
+                error,
+                .runtimeMutationRequiresApproval(
+                    "Stage 4 microbenchmark measurement requires explicit current-task approval and token \(LinuxPodBackend.runtimeApprovalToken)."
+                )
+            )
+        }
+    }
+
+    func testStage4MicrobenchmarkExecutorStopsAfterApprovalUntilRuntimeSliceExists() async throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T08:45:00Z")
+
+        do {
+            _ = try await Stage4MicrobenchmarkExecutor().measure(
+                plan: record,
+                approval: RuntimeApproval(approved: true, token: LinuxPodBackend.runtimeApprovalToken)
+            )
+            XCTFail("Expected approved Stage 4 measurement scaffold to stop before runtime work.")
+        } catch let error as RuntimeBackendError {
+            XCTAssertEqual(
+                error,
+                .runtimeUnavailable(
+                    "Stage 4 microbenchmark measurement executor is approval-gated but not implemented in this no-runtime slice."
+                )
+            )
+        }
+    }
+
+    func testStage4MicrobenchmarkExecutorUsesApprovedRunnerToProduceMeasurementRecords() async throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T08:50:00Z")
+
+        let measurements = try await Stage4MicrobenchmarkExecutor(
+            runner: RecordingStage4MicrobenchmarkRunner(timestamp: "2026-06-12T08:51:00Z")
+        ).measure(
+            plan: record,
+            approval: RuntimeApproval(approved: true, token: LinuxPodBackend.runtimeApprovalToken)
+        )
+
+        XCTAssertEqual(measurements.count, record.probes.count)
+        XCTAssertEqual(measurements.first?.schemaVersion, Stage4MicrobenchmarkSchema.version)
+        XCTAssertEqual(measurements.first?.recordType, Stage4MicrobenchmarkSchema.measurementRecordType)
+        XCTAssertEqual(measurements.first?.projectID, record.projectID)
+        XCTAssertEqual(measurements.first?.runtimeResourceName, record.runtimeResourceName)
+        XCTAssertEqual(measurements.first?.probeID, record.probes.first?.probeID)
+        XCTAssertEqual(measurements.first?.kind, record.probes.first?.kind)
+        XCTAssertEqual(measurements.first?.environment?.coldOrWarm, record.probes.first?.coldOrWarm)
+        XCTAssertEqual(measurements.first?.status, .measured)
+        XCTAssertEqual(measurements.first?.hostPhysicalMemoryStatus, .blocked)
+        XCTAssertEqual(measurements.first?.metrics.durationSeconds, 1.25)
+        XCTAssertEqual(measurements.first?.metrics.blockReadBytes, 1024)
+        XCTAssertEqual(measurements.first?.metrics.blockWriteBytes, 2048)
+        XCTAssertEqual(measurements.first?.metrics.cleanupResult, "clean")
+        XCTAssertEqual(measurements.first?.guest?.cgroupMemoryCurrentBytes, 64 * 1024 * 1024)
+        XCTAssertNil(measurements.first?.failure)
+    }
+
+    func testLinuxPodStage4MicrobenchmarkRunnerTranslatesProbesIntoScopedOperations() async throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T08:52:00Z")
+        let operationExecutor = RecordingStage4OperationExecutor(timestamp: "2026-06-12T08:53:00Z")
+
+        let measurements = try await Stage4MicrobenchmarkExecutor(
+            runner: LinuxPodStage4MicrobenchmarkRunner(operationExecutor: operationExecutor)
+        ).measure(
+            plan: record,
+            approval: RuntimeApproval(approved: true, token: LinuxPodBackend.runtimeApprovalToken)
+        )
+
+        XCTAssertEqual(measurements.count, record.probes.count)
+        XCTAssertEqual(operationExecutor.operations.count, record.probes.count)
+        let rootfsOperation = try XCTUnwrap(operationExecutor.operations.first { $0.kind == .rootfsUnpack })
+        XCTAssertEqual(rootfsOperation.mutationScope, .reusableCache)
+        XCTAssertEqual(rootfsOperation.cleanupExpectation, "preserve-reusable-cache")
+        XCTAssertTrue(rootfsOperation.requiresRuntimeApproval)
+        XCTAssertFalse(rootfsOperation.mutatesGlobalState)
+        let volumeOperation = try XCTUnwrap(operationExecutor.operations.first { $0.kind == .namedVolumeFresh })
+        XCTAssertEqual(volumeOperation.mutationScope, .projectNamedVolume)
+        XCTAssertEqual(volumeOperation.cleanupExpectation, "preserve-named-volume-by-default")
+        let healthcheckOperation = try XCTUnwrap(operationExecutor.operations.first { $0.kind == .healthcheckExec })
+        XCTAssertEqual(healthcheckOperation.mutationScope, .runtimeExec)
+        XCTAssertFalse(healthcheckOperation.command.isEmpty)
+
+        let healthcheckMeasurement = try XCTUnwrap(measurements.first { $0.kind == .healthcheckExec })
+        XCTAssertEqual(healthcheckMeasurement.recordType, Stage4MicrobenchmarkSchema.measurementRecordType)
+        XCTAssertEqual(healthcheckMeasurement.timestamp, "2026-06-12T08:53:00Z")
+        XCTAssertEqual(healthcheckMeasurement.status, .measured)
+        XCTAssertEqual(healthcheckMeasurement.metrics.healthcheckAttempts, 1)
+        XCTAssertEqual(healthcheckMeasurement.metrics.cleanupResult, "clean")
+        XCTAssertEqual(healthcheckMeasurement.environment?.runtime, .linuxpod)
+        XCTAssertEqual(healthcheckMeasurement.hostPhysicalMemoryStatus, .blocked)
+        XCTAssertNil(healthcheckMeasurement.failure)
+    }
+
+    func testStage4MicrobenchmarkWriterAppendsMeasurementJSONL() async throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T08:55:00Z")
+        let measurements = try await Stage4MicrobenchmarkExecutor(
+            runner: RecordingStage4MicrobenchmarkRunner(timestamp: "2026-06-12T08:56:00Z")
+        ).measure(
+            plan: record,
+            approval: RuntimeApproval(approved: true, token: LinuxPodBackend.runtimeApprovalToken)
+        )
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-measurement-jsonl-\(UUID().uuidString)", isDirectory: true)
+        let evidencePath = tempRoot.appendingPathComponent("stage4-measurement.jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        try Stage4MicrobenchmarkJSONLWriter().append(measurements[0], to: evidencePath)
+
+        let contents = try String(contentsOf: evidencePath, encoding: .utf8)
+        let decoded = try JSONDecoder().decode(
+            Stage4MicrobenchmarkMeasurementRecord.self,
+            from: Data(contents.split(separator: "\n")[0].utf8)
+        )
+        XCTAssertEqual(decoded, measurements[0])
+        XCTAssertTrue(contents.contains("\"record_type\":\"linuxpod-stage4-microbenchmark-measurement\""))
+        XCTAssertTrue(contents.contains("\"host_physical_memory_status\":\"blocked\""))
+        XCTAssertTrue(contents.contains("\"block_read_bytes\":1024"))
+        XCTAssertTrue(contents.contains("\"runtime_context\""))
+        XCTAssertTrue(contents.contains("\"vminit_image_digest\":\"sha256:test-vminit-1\""))
+        XCTAssertTrue(contents.contains("\"cleanup_proof\""))
+        XCTAssertTrue(contents.contains("\"global_cleanup\":\"not-run\""))
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorReadsMeasurementJSONLFiles() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-measurement-validation-\(UUID().uuidString)", isDirectory: true)
+        let planURL = tempRoot.appendingPathComponent("stage4-plan.jsonl")
+        let measurementURL = tempRoot.appendingPathComponent("stage4-measurements.jsonl")
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:15:00Z")
+        let measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:16:00Z")
+        let writer = Stage4MicrobenchmarkJSONLWriter()
+        try writer.append(record, to: planURL)
+        for measurement in measurements {
+            try writer.append(measurement, to: measurementURL)
+        }
+
+        let diagnostics = try Stage4MicrobenchmarkEvidenceValidator().validate(
+            planEvidenceURL: planURL,
+            measurementEvidenceURL: measurementURL
+        )
+
+        XCTAssertEqual(diagnostics, [])
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsIncompleteMeasurementEvidence() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:20:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:21:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:21:00Z",
+            projectID: "other-project",
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: nil,
+            runtimeContext: Self.measurementRuntimeContext(sequence: 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: 1),
+            status: .measured,
+            metrics: Stage4MicrobenchmarkMetrics(),
+            guest: nil,
+            failure: nil
+        )
+        let secondProbe = try XCTUnwrap(record.probes.dropFirst().first)
+        measurements[1] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:21:01Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: secondProbe,
+            environment: measurementEnvironment(
+                for: secondProbe,
+                runtimeResourceName: record.runtimeResourceName,
+                sequence: 2
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: 2),
+            cleanupProof: Self.measurementCleanupProof(sequence: 2),
+            status: .failed,
+            metrics: measurementMetrics(for: secondProbe, sequence: 2),
+            guest: measurementGuest(sequence: 2),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(
+            Set(diagnostics.map(\.code)),
+            [
+                "stage4-measurement-project-mismatch",
+                "stage4-measurement-environment-missing",
+                "stage4-measurement-duration-missing",
+                "stage4-measurement-block-io-missing",
+                "stage4-measurement-cleanup-missing",
+                "stage4-measurement-guest-missing",
+                "stage4-measurement-failure-missing"
+            ]
+        )
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsRuntimeTargetMismatch() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:22:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:23:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:23:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: "cca-linuxpod-other-project",
+                runtimeVersion: "test",
+                containerizationVersion: "0.26.5",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: BenchmarkLifecycle(rawValue: firstProbe.coldOrWarm) ?? .cold,
+                projectRuntimeExistedBeforeRun: false,
+                imageCacheStatus: .miss,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .miss,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: 1),
+            status: .measured,
+            metrics: measurementMetrics(for: firstProbe, sequence: 1),
+            guest: measurementGuest(sequence: 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-runtime-target-mismatch"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsMissingImageCacheStateForImageProbe() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:24:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:24:30Z")
+        let rootfsProbe = try XCTUnwrap(record.probes.first { !$0.imageReference.isEmpty })
+        let rootfsIndex = try XCTUnwrap(measurements.firstIndex { $0.probeID == rootfsProbe.probeID })
+        measurements[rootfsIndex] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:24:30Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: rootfsProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: record.runtimeResourceName,
+                runtimeVersion: "test",
+                containerizationVersion: "0.26.5",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: BenchmarkLifecycle(rawValue: rootfsProbe.coldOrWarm) ?? .cold,
+                projectRuntimeExistedBeforeRun: false,
+                imageCacheStatus: .unknown,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .miss,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: rootfsIndex + 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: rootfsIndex + 1),
+            status: .measured,
+            metrics: measurementMetrics(for: rootfsProbe, sequence: rootfsIndex + 1),
+            guest: measurementGuest(sequence: rootfsIndex + 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-image-cache-state-missing"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsMeasurementWithoutRuntimeContext() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:25:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:26:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:26:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: measurementEnvironment(
+                for: firstProbe,
+                runtimeResourceName: record.runtimeResourceName,
+                sequence: 1
+            ),
+            cleanupProof: Self.measurementCleanupProof(sequence: 1),
+            status: .measured,
+            metrics: measurementMetrics(for: firstProbe, sequence: 1),
+            guest: measurementGuest(sequence: 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-runtime-context-missing"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsMeasurementWithoutCleanupProof() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:30:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:31:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:31:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: measurementEnvironment(
+                for: firstProbe,
+                runtimeResourceName: record.runtimeResourceName,
+                sequence: 1
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: 1),
+            status: .measured,
+            metrics: measurementMetrics(for: firstProbe, sequence: 1),
+            guest: measurementGuest(sequence: 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-cleanup-proof-missing"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsRootfsCacheStateMismatch() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:32:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:33:00Z")
+        let rootfsCopyIndex = try XCTUnwrap(measurements.firstIndex { $0.kind == .rootfsCopy })
+        let rootfsCopyProbe = try XCTUnwrap(record.probes.first { $0.probeID == measurements[rootfsCopyIndex].probeID })
+        measurements[rootfsCopyIndex] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:33:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: rootfsCopyProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: record.runtimeResourceName,
+                runtimeVersion: "test",
+                containerizationVersion: "0.26.5",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: .warm,
+                projectRuntimeExistedBeforeRun: true,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .hit,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: rootfsCopyIndex + 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: rootfsCopyIndex + 1),
+            status: .measured,
+            metrics: measurementMetrics(for: rootfsCopyProbe, sequence: rootfsCopyIndex + 1),
+            guest: measurementGuest(sequence: rootfsCopyIndex + 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-rootfs-cache-state-mismatch"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsNamedVolumeLifecycleMismatch() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:34:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:35:00Z")
+        let namedVolumeWarmIndex = try XCTUnwrap(measurements.firstIndex { $0.kind == .namedVolumeWarm })
+        let namedVolumeWarmProbe = try XCTUnwrap(record.probes.first { $0.probeID == measurements[namedVolumeWarmIndex].probeID })
+        measurements[namedVolumeWarmIndex] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:35:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: namedVolumeWarmProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: record.runtimeResourceName,
+                runtimeVersion: "test",
+                containerizationVersion: "0.26.5",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: .warm,
+                projectRuntimeExistedBeforeRun: true,
+                imageCacheStatus: .unknown,
+                rootfsCacheStatus: .unknown,
+                initfsCacheStatus: .hit,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: namedVolumeWarmIndex + 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: namedVolumeWarmIndex + 1),
+            status: .measured,
+            metrics: measurementMetrics(for: namedVolumeWarmProbe, sequence: namedVolumeWarmIndex + 1),
+            guest: measurementGuest(sequence: namedVolumeWarmIndex + 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-volume-lifecycle-mismatch"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsContainerizationVersionMismatch() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:36:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:37:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:37:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: record.runtimeResourceName,
+                runtimeVersion: "test",
+                containerizationVersion: "0.25.0",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: BenchmarkLifecycle(rawValue: firstProbe.coldOrWarm) ?? .cold,
+                projectRuntimeExistedBeforeRun: false,
+                imageCacheStatus: .miss,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .miss,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: 1),
+            status: .measured,
+            metrics: measurementMetrics(for: firstProbe, sequence: 1),
+            guest: measurementGuest(sequence: 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-containerization-version-mismatch"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsMissingContainerizationVersion() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:38:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:39:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:39:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: record.runtimeResourceName,
+                runtimeVersion: "test",
+                containerizationVersion: nil,
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: BenchmarkLifecycle(rawValue: firstProbe.coldOrWarm) ?? .cold,
+                projectRuntimeExistedBeforeRun: false,
+                imageCacheStatus: .miss,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .miss,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: 1),
+            status: .measured,
+            metrics: measurementMetrics(for: firstProbe, sequence: 1),
+            guest: measurementGuest(sequence: 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-containerization-version-missing"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    func testStage4MicrobenchmarkEvidenceValidatorRejectsInitfsCacheStateMismatch() throws {
+        let record = try stage4MicrobenchmarkPlan(timestamp: "2026-06-12T09:40:00Z")
+        var measurements = completeStage4Measurements(plan: record, timestamp: "2026-06-12T09:41:00Z")
+        let firstProbe = try XCTUnwrap(record.probes.first)
+        measurements[0] = Stage4MicrobenchmarkMeasurementRecord(
+            timestamp: "2026-06-12T09:41:00Z",
+            projectID: record.projectID,
+            runtimeResourceName: record.runtimeResourceName,
+            probe: firstProbe,
+            environment: BenchmarkRunMetadata(
+                runtime: .linuxpod,
+                targetName: record.runtimeResourceName,
+                runtimeVersion: "test",
+                containerizationVersion: "0.26.5",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                lifecycle: BenchmarkLifecycle(rawValue: firstProbe.coldOrWarm) ?? .cold,
+                projectRuntimeExistedBeforeRun: false,
+                imageCacheStatus: .miss,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .hit,
+                volumeExistedBeforeRun: false
+            ),
+            runtimeContext: Self.measurementRuntimeContext(sequence: 1),
+            cleanupProof: Self.measurementCleanupProof(sequence: 1),
+            status: .measured,
+            metrics: measurementMetrics(for: firstProbe, sequence: 1),
+            guest: measurementGuest(sequence: 1),
+            failure: nil
+        )
+
+        let diagnostics = Stage4MicrobenchmarkEvidenceValidator().validate(
+            plan: record,
+            measurements: measurements
+        )
+
+        XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage4-measurement-initfs-cache-state-mismatch"])
+        XCTAssertTrue(diagnostics.allSatisfy { $0.severity == .blocking })
+    }
+
+    private func stage4MicrobenchmarkPlan(timestamp: String) throws -> Stage4MicrobenchmarkPlanRecord {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage4-executor-\(UUID().uuidString)", isDirectory: true)
+        let project = try ComposeFrontend()
+            .parseProject(fileURL: fixtureURL("backend-shaped/compose.yaml"), projectName: "backend-shaped")
+            .project
+        return Stage4MicrobenchmarkPlanner(store: ProjectRuntimeStore(baseDirectory: root))
+            .plan(project: project, timestamp: timestamp)
+    }
+
+    private func completeStage4Measurements(
+        plan: Stage4MicrobenchmarkPlanRecord,
+        timestamp: String
+    ) -> [Stage4MicrobenchmarkMeasurementRecord] {
+        plan.probes.enumerated().map { index, probe in
+            Stage4MicrobenchmarkMeasurementRecord(
+                timestamp: timestamp,
+                projectID: plan.projectID,
+                runtimeResourceName: plan.runtimeResourceName,
+                probe: probe,
+                environment: measurementEnvironment(
+                    for: probe,
+                    runtimeResourceName: plan.runtimeResourceName,
+                    sequence: index + 1
+                ),
+                runtimeContext: Self.measurementRuntimeContext(sequence: index + 1),
+                cleanupProof: Self.measurementCleanupProof(sequence: index + 1),
+                status: .measured,
+                metrics: measurementMetrics(for: probe, sequence: index + 1),
+                guest: measurementGuest(sequence: index + 1),
+                failure: nil
+            )
+        }
+    }
+
+    private func measurementEnvironment(
+        for probe: Stage4MicrobenchmarkProbe,
+        runtimeResourceName: String,
+        sequence: Int
+    ) -> BenchmarkRunMetadata {
+        let lifecycle = BenchmarkLifecycle(rawValue: probe.coldOrWarm) ?? .warm
+        let rootfsCacheStatus: BenchmarkCacheStatus
+        switch probe.kind {
+        case .rootfsUnpack:
+            rootfsCacheStatus = .miss
+        case .rootfsCopy, .apfsClone:
+            rootfsCacheStatus = .hit
+        case .namedVolumeFresh, .namedVolumeWarm, .healthcheckExec:
+            rootfsCacheStatus = .unknown
+        }
+        return BenchmarkRunMetadata(
+            runtime: .linuxpod,
+            targetName: runtimeResourceName,
+            runtimeVersion: "test",
+            containerizationVersion: "0.26.5",
+            appleContainerCLIVersion: nil,
+            macOSVersion: "test-macos",
+            hostArchitecture: "arm64",
+            lifecycle: lifecycle,
+            projectRuntimeExistedBeforeRun: lifecycle == .warm,
+            imageCacheStatus: probe.imageReference.isEmpty ? .unknown : (sequence == 1 ? .miss : .hit),
+            rootfsCacheStatus: rootfsCacheStatus,
+            initfsCacheStatus: sequence == 1 ? .miss : .hit,
+            volumeExistedBeforeRun: probe.kind == .namedVolumeWarm
+        )
+    }
+
+    private static func measurementRuntimeContext(sequence: Int) -> Stage4MicrobenchmarkRuntimeContext {
+        Stage4MicrobenchmarkRuntimeContext(
+            containerizationVersion: "0.26.5",
+            rootfsFormatVersion: "ext4-v1",
+            vminitImageReference: "ghcr.io/apple/containerization/vminit:0.26.5",
+            vminitImageDigest: "sha256:test-vminit-\(sequence)",
+            kernelPath: "/System/Library/Kernels/kernel",
+            kernelVersion: "test-kernel-\(sequence)",
+            kernelArchitecture: "arm64",
+            initfsCacheStatus: sequence == 1 ? .miss : .hit
+        )
+    }
+
+    private static func measurementCleanupProof(sequence: Int) -> Stage4MicrobenchmarkCleanupProof {
+        Stage4MicrobenchmarkCleanupProof(
+            cleanupDurationSeconds: Double(sequence) / 100.0,
+            runtimeCleanup: "clean",
+            volumeCleanup: "preserved-by-default",
+            portCleanup: "released",
+            logCleanup: "clean",
+            metricsCleanup: "clean",
+            cacheCleanup: "preserved",
+            globalCleanup: "not-run",
+            staleFileCount: 0,
+            staleProcessCount: 0,
+            stalePortCount: 0
+        )
+    }
+
+    private func measurementMetrics(
+        for probe: Stage4MicrobenchmarkProbe,
+        sequence: Int
+    ) -> Stage4MicrobenchmarkMetrics {
+        let duration = Double(sequence) / 10.0
+        switch probe.kind {
+        case .rootfsUnpack:
+            return Stage4MicrobenchmarkMetrics(
+                durationSeconds: duration,
+                blockReadBytes: UInt64(sequence * 4096),
+                blockWriteBytes: UInt64(sequence * 8192),
+                cleanupResult: "clean"
+            )
+        case .rootfsCopy:
+            return Stage4MicrobenchmarkMetrics(
+                durationSeconds: duration,
+                bytesCopied: UInt64(sequence * 1_048_576),
+                blockReadBytes: UInt64(sequence * 4096),
+                blockWriteBytes: UInt64(sequence * 8192),
+                cleanupResult: "clean"
+            )
+        case .apfsClone:
+            return Stage4MicrobenchmarkMetrics(
+                durationSeconds: duration,
+                blockWriteBytes: UInt64(sequence * 1024),
+                cloneSuccess: true,
+                cleanupResult: "clean"
+            )
+        case .namedVolumeFresh, .namedVolumeWarm:
+            return Stage4MicrobenchmarkMetrics(
+                durationSeconds: duration,
+                blockReadBytes: UInt64(sequence * 2048),
+                blockWriteBytes: UInt64(sequence * 4096),
+                cleanupResult: "clean"
+            )
+        case .healthcheckExec:
+            return Stage4MicrobenchmarkMetrics(
+                durationSeconds: duration,
+                blockReadBytes: UInt64(sequence * 512),
+                healthcheckAttempts: 1,
+                timeoutSeconds: 2,
+                cleanupResult: "clean"
+            )
+        }
+    }
+
+    private func measurementGuest(sequence: Int) -> HostFootprintGuestStats {
+        HostFootprintGuestStats(
+            cgroupMemoryCurrentBytes: UInt64(sequence) * 16 * 1024 * 1024,
+            cgroupMemoryLimitBytes: 512 * 1024 * 1024,
+            processCount: 2,
+            cpuUsageUsec: UInt64(sequence * 100),
+            blockReadBytes: UInt64(sequence * 4096),
+            blockWriteBytes: UInt64(sequence * 8192)
+        )
+    }
+
+    private struct RecordingStage4MicrobenchmarkRunner: Stage4MicrobenchmarkRunning {
+        let timestamp: String
+
+        func measure(
+            probe: Stage4MicrobenchmarkProbe,
+            plan: Stage4MicrobenchmarkPlanRecord,
+            sequence: Int
+        ) async throws -> Stage4MicrobenchmarkMeasurementRecord {
+            Stage4MicrobenchmarkMeasurementRecord(
+                timestamp: timestamp,
+                projectID: plan.projectID,
+                runtimeResourceName: plan.runtimeResourceName,
+                probe: probe,
+                environment: BenchmarkRunMetadata(
+                    runtime: .linuxpod,
+                    targetName: plan.runtimeResourceName,
+                    runtimeVersion: "test",
+                    containerizationVersion: "0.26.5",
+                    appleContainerCLIVersion: nil,
+                    macOSVersion: "test-macos",
+                    hostArchitecture: "arm64",
+                    lifecycle: BenchmarkLifecycle(rawValue: probe.coldOrWarm) ?? .warm,
+                    projectRuntimeExistedBeforeRun: sequence > 1,
+                    imageCacheStatus: sequence > 1 ? .hit : .miss,
+                    rootfsCacheStatus: sequence > 1 ? .hit : .miss,
+                    initfsCacheStatus: sequence == 1 ? .miss : .hit,
+                    volumeExistedBeforeRun: sequence > 1
+                ),
+                runtimeContext: RuntimeContractTests.measurementRuntimeContext(sequence: sequence),
+                cleanupProof: RuntimeContractTests.measurementCleanupProof(sequence: sequence),
+                status: .measured,
+                metrics: Stage4MicrobenchmarkMetrics(
+                    durationSeconds: Double(sequence) + 0.25,
+                    bytesCopied: UInt64(sequence * 4096),
+                    blockReadBytes: UInt64(sequence * 1024),
+                    blockWriteBytes: UInt64(sequence * 2048),
+                    cleanupResult: "clean"
+                ),
+                guest: HostFootprintGuestStats(
+                    cgroupMemoryCurrentBytes: UInt64(sequence) * 64 * 1024 * 1024,
+                    cgroupMemoryLimitBytes: 512 * 1024 * 1024,
+                    processCount: 3,
+                    cpuUsageUsec: 500,
+                    blockReadBytes: UInt64(sequence * 1024),
+                    blockWriteBytes: UInt64(sequence * 2048)
+                ),
+                failure: nil
+            )
+        }
+    }
+
+    private final class RecordingStage4OperationExecutor: Stage4MicrobenchmarkOperationExecuting, @unchecked Sendable {
+        let timestamp: String
+        var operations: [Stage4MicrobenchmarkOperation] = []
+
+        init(timestamp: String) {
+            self.timestamp = timestamp
+        }
+
+        func measure(
+            operation: Stage4MicrobenchmarkOperation,
+            plan: Stage4MicrobenchmarkPlanRecord,
+            sequence: Int
+        ) async throws -> Stage4MicrobenchmarkOperationResult {
+            operations.append(operation)
+            return Stage4MicrobenchmarkOperationResult(
+                timestamp: timestamp,
+                environment: BenchmarkRunMetadata(
+                    runtime: .linuxpod,
+                    targetName: plan.runtimeResourceName,
+                    runtimeVersion: "test",
+                    containerizationVersion: "0.26.5",
+                    appleContainerCLIVersion: nil,
+                    macOSVersion: "test-macos",
+                    hostArchitecture: "arm64",
+                    lifecycle: BenchmarkLifecycle(rawValue: operation.coldOrWarm) ?? .warm,
+                    projectRuntimeExistedBeforeRun: operation.coldOrWarm == BenchmarkLifecycle.warm.rawValue,
+                    imageCacheStatus: operation.imageReference.isEmpty ? .unknown : .hit,
+                    rootfsCacheStatus: operation.imageReference.isEmpty ? .unknown : .hit,
+                    initfsCacheStatus: sequence == 1 ? .miss : .hit,
+                    volumeExistedBeforeRun: operation.coldOrWarm == BenchmarkLifecycle.warm.rawValue
+                ),
+                runtimeContext: RuntimeContractTests.measurementRuntimeContext(sequence: sequence),
+                cleanupProof: RuntimeContractTests.measurementCleanupProof(sequence: sequence),
+                status: .measured,
+                metrics: Stage4MicrobenchmarkMetrics(
+                    durationSeconds: 0.15,
+                    blockReadBytes: 512,
+                    blockWriteBytes: 128,
+                    healthcheckAttempts: operation.kind == .healthcheckExec ? 1 : nil,
+                    cleanupResult: "clean"
+                ),
+                guest: HostFootprintGuestStats(
+                    cgroupMemoryCurrentBytes: 32 * 1024 * 1024,
+                    cgroupMemoryLimitBytes: 512 * 1024 * 1024,
+                    processCount: 2,
+                    cpuUsageUsec: 100,
+                    blockReadBytes: 512,
+                    blockWriteBytes: 128
+                ),
+                failure: nil
+            )
+        }
+    }
+
     func testExecutionResultRendersActionMetadataForHumanOutput() {
         let result = ExecutionResult(
             backend: .linuxpod,
@@ -570,5 +1974,11 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(message.contains("not plain swift run"))
         XCTAssertTrue(message.contains("scripts/sign-debug-runtime.sh"))
         XCTAssertTrue(message.contains(".build/arm64-apple-macosx/debug/container-compose-adapter"))
+    }
+
+    private func fixtureURL(_ name: String) -> URL {
+        URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("docs/evidence/fixtures")
+            .appendingPathComponent(name)
     }
 }
