@@ -1,0 +1,70 @@
+{
+  "records": 6,
+  "scenarios": {
+    "idle-pod": {
+      "metrics": {
+        "blockReadBytes": null,
+        "blockWriteBytes": null,
+        "cgroupMemoryCurrentBytes": null,
+        "cgroupMemoryPeakBytes": null,
+        "cpuPercent": null,
+        "dbDataFootprintBytes": null,
+        "hostRuntimeRSSBytes": null,
+        "loadCompletedWork": null,
+        "loadErrors": null,
+        "processHighWaterRSSBytes": null,
+        "processRSSBytes": null
+      },
+      "records": 2,
+      "statuses": {
+        "blocked-runtime": 1,
+        "planned-dry-run": 1
+      }
+    },
+    "postgres-api": {
+      "metrics": {
+        "blockReadBytes": null,
+        "blockWriteBytes": null,
+        "cgroupMemoryCurrentBytes": null,
+        "cgroupMemoryPeakBytes": null,
+        "cpuPercent": null,
+        "dbDataFootprintBytes": null,
+        "hostRuntimeRSSBytes": null,
+        "loadCompletedWork": null,
+        "loadErrors": null,
+        "processHighWaterRSSBytes": null,
+        "processRSSBytes": null
+      },
+      "records": 2,
+      "statuses": {
+        "blocked-runtime": 1,
+        "planned-dry-run": 1
+      }
+    },
+    "postgres-only": {
+      "metrics": {
+        "blockReadBytes": null,
+        "blockWriteBytes": null,
+        "cgroupMemoryCurrentBytes": null,
+        "cgroupMemoryPeakBytes": null,
+        "cpuPercent": null,
+        "dbDataFootprintBytes": null,
+        "hostRuntimeRSSBytes": null,
+        "loadCompletedWork": null,
+        "loadErrors": null,
+        "processHighWaterRSSBytes": null,
+        "processRSSBytes": null
+      },
+      "records": 2,
+      "statuses": {
+        "blocked-runtime": 1,
+        "planned-dry-run": 1
+      }
+    }
+  },
+  "schemaVersion": "linuxpod-base-overhead-summary/v1",
+  "statuses": {
+    "blocked-runtime": 3,
+    "planned-dry-run": 3
+  }
+}

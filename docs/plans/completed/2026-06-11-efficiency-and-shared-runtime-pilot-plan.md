@@ -160,7 +160,7 @@ Purpose: validate real-world relevance only after public fixtures are safe.
 
 ### Phase 0: Baseline Context And Capability Discovery
 
-Evidence: [Phase 0 Capability Discovery Evidence](notes/2026-06-11-phase-0-capability-discovery-evidence.md).
+Evidence: [Phase 0 Capability Discovery Evidence](../notes/2026-06-11-phase-0-capability-discovery-evidence.md).
 
 - [x] Read `AGENTS.md`, `CLAUDE.md`, `README.md`, `docs/plans/index.md`, this plan, and the main implementation plan.
 - [x] Capture macOS version, CPU architecture, available memory, and shell environment relevant to runtime measurements.
@@ -172,46 +172,56 @@ Evidence: [Phase 0 Capability Discovery Evidence](notes/2026-06-11-phase-0-capab
 
 ### Phase 1: Measurement Harness Design
 
-- [ ] Define a stable evidence schema for benchmark runs.
-- [ ] Define command wrappers that record start time, end time, exit code, stdout/stderr summary, and resource snapshots.
-- [ ] Define resource snapshot strategy for memory, CPU, disk, and runtime resource count.
-- [ ] Define redaction rules for env values and command output.
-- [ ] Document how to mark evidence as `measured`, `skipped-runtime-unavailable`, or `blocked`.
-- [ ] Add dry-run-only harness behavior before any mutating runtime measurement.
+- [x] Define a stable evidence schema for benchmark runs.
+- [x] Define command wrappers that record start time, end time, exit code, stdout/stderr summary, and resource snapshots.
+- [x] Define resource snapshot strategy for memory, CPU, disk, and runtime resource count.
+- [x] Define redaction rules for env values and command output.
+- [x] Document how to mark evidence as `measured`, `skipped-runtime-unavailable`, `cli-available-service-stopped`, `skipped-approval-not-granted`, or `blocked`.
+- [x] Add dry-run-only harness behavior before any mutating runtime measurement.
+
+Evidence: [Pilot Phase 1 Harness Design](../notes/2026-06-11-pilot-phase-1-harness-design.md).
 
 ### Phase 2: OrbStack/Docker Compose Baseline
 
-- [ ] Build a public simple-web Compose fixture.
-- [ ] Build a public backend-shaped Compose fixture.
-- [ ] Run the baseline only when Docker/OrbStack is available and execution is approved.
-- [ ] Measure cold start, warm start, rebuild, idle memory, peak memory, CPU, disk, teardown, and repeated `up`.
-- [ ] Record resource cleanup behavior and named volume persistence.
-- [ ] Save evidence under `docs/plans/notes/` or `docs/evidence/` if that folder exists by then.
+- [x] Build a public simple-web Compose fixture.
+- [x] Build a public backend-shaped Compose fixture.
+- [x] Run the baseline only when Docker/OrbStack is available and execution is approved. Baseline execution was approved in a follow-up instruction and measured.
+- [x] Measure cold start, warm start, rebuild, idle memory, peak memory, CPU, disk, teardown, and repeated `up`. Cold/warm/repeated/teardown/status/logs/resource snapshots were measured; rebuild remains not applicable because the public fixtures use prebuilt images.
+- [x] Record resource cleanup behavior and named volume persistence. Docker cleanup and named volume persistence were measured successfully.
+- [x] Save evidence under `docs/plans/notes/` or `docs/evidence/` if that folder exists by then.
+
+Evidence: [Pilot Phase 2 Docker Baseline Evidence](../notes/2026-06-11-pilot-phase-2-docker-baseline-evidence.md) and [public fixtures](../../evidence/fixtures/README.md).
 
 ### Phase 3: Apple Native Per-container Pilot
 
-- [ ] Map the simple-web fixture manually or through a minimal pilot harness to Apple `container` commands.
-- [ ] Map the backend-shaped fixture to Apple `container` commands as far as current runtime capabilities allow.
-- [ ] Measure the same metrics as the OrbStack baseline when Apple `container` is available and execution is approved.
-- [ ] Record missing features as blocking diagnostics rather than papering over them.
-- [ ] Identify whether per-container overhead is acceptable for daily development.
+- [x] Map the simple-web fixture manually or through a minimal pilot harness to Apple `container` commands.
+- [x] Map the backend-shaped fixture to Apple `container` commands as far as current runtime capabilities allow.
+- [x] Measure the same metrics as the OrbStack baseline when Apple `container` is available and execution is approved. Simple-web was measured; backend-shaped was measured with PGDATA and IP-targeting workarounds and documented parity gaps.
+- [x] Record missing features as blocking diagnostics rather than papering over them.
+- [x] Identify whether per-container overhead is acceptable for daily development. Simple-web cached startup is promising; backend-shaped per-container defaults and service/volume gaps are not ready for daily-development replacement claims.
+
+Evidence: [Pilot Phase 3 Apple Container Evidence](../notes/2026-06-11-pilot-phase-3-apple-container-evidence.md).
 
 ### Phase 4: Shared Runtime Feasibility Spike
 
-- [ ] Verify whether official Apple `container` CLI exposes any shared-runtime or pod-like primitive.
-- [ ] Verify whether `apple/containerization` public APIs can run multiple isolated OCI roots/processes inside one VM while preserving service lifecycle, logs, networking, and cleanup.
-- [ ] If official support exists, sketch the smallest shared-runtime adapter mode and required tests.
-- [ ] If official support does not exist, document why a custom shared VM/containerd approach would be a separate runtime product.
-- [ ] Decide whether shared runtime remains in scope, becomes a future research track, or is explicitly out of scope.
+- [x] Verify whether official Apple `container` CLI exposes any shared-runtime or pod-like primitive.
+- [x] Verify whether `apple/containerization` public APIs can run multiple isolated OCI roots/processes inside one VM while preserving service lifecycle, logs, networking, and cleanup.
+- [x] If official support exists, sketch the smallest shared-runtime adapter mode and required tests.
+- [x] If official support does not exist, document why a custom shared VM/containerd approach would be a separate runtime product.
+- [x] Decide whether shared runtime remains in scope, becomes a future research track, or is explicitly out of scope.
+
+Evidence: [Pilot Phase 4 Shared Runtime Feasibility](../notes/2026-06-11-pilot-phase-4-shared-runtime-feasibility.md). The classification is: Apple `container` CLI shared runtime is unsupported; lower-level `containerization` `LinuxPod` is possible but out of scope for the first implementation and should be a future research track.
 
 ### Phase 5: Decision Report And Plan Updates
 
-- [ ] Write a pilot report with measured data, skipped evidence, blockers, and recommendation.
-- [ ] Compare Apple native per-container results against OrbStack/Docker Compose baseline.
-- [ ] State whether the project should proceed because it is more efficient, proceed for non-performance reasons, narrow scope, pause, or pivot.
-- [ ] Update the main implementation plan with the decision.
-- [ ] Update `docs/plans/index.md` with the next concrete todo.
-- [ ] If the pilot is complete, move this plan to `docs/plans/completed/` and update `docs/plans/completed/index.md`.
+- [x] Write a pilot report with measured data, skipped evidence, blockers, and recommendation.
+- [x] Compare Apple native per-container results against OrbStack/Docker Compose baseline. Simple-web and backend-shaped public fixture evidence is compared in the report.
+- [x] State whether the project should proceed because it is more efficient, proceed for non-performance reasons, narrow scope, pause, or pivot.
+- [x] Update the main implementation plan with the decision.
+- [x] Update `docs/plans/index.md` with the next concrete todo.
+- [x] If the pilot is complete, move this plan to `docs/plans/completed/` and update `docs/plans/completed/index.md`.
+
+Evidence: [Efficiency Pilot Decision Report](../notes/2026-06-11-efficiency-pilot-decision-report.md).
 
 ## Go / No-go Criteria
 

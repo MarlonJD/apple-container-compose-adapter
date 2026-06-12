@@ -1,0 +1,340 @@
+{
+  "records": 10,
+  "scenarios": {
+    "idle-pod": {
+      "measuredRecords": 1,
+      "metrics": {
+        "blockReadBytes": {
+          "max": 1654784,
+          "min": 1654784,
+          "n": 1,
+          "p50": 1654784
+        },
+        "blockWriteBytes": {
+          "max": 0,
+          "min": 0,
+          "n": 1,
+          "p50": 0
+        },
+        "cgroupMemoryCurrentBytes": {
+          "max": 1900544,
+          "min": 1900544,
+          "n": 1,
+          "p50": 1900544
+        },
+        "cgroupMemoryLimitBytes": {
+          "max": 18446744073709551615,
+          "min": 18446744073709551615,
+          "n": 1,
+          "p50": 18446744073709551615
+        },
+        "cgroupMemoryPeakBytes": null,
+        "cpuPercent": null,
+        "cpuUsageUsec": {
+          "max": 3061,
+          "min": 3061,
+          "n": 1,
+          "p50": 3061
+        },
+        "createSeconds": {
+          "max": 0.666003942489624,
+          "min": 0.666003942489624,
+          "n": 1,
+          "p50": 0.666003942489624
+        },
+        "dbDataFootprintBytes": null,
+        "deleteSeconds": {
+          "max": 0.022360920906066895,
+          "min": 0.022360920906066895,
+          "n": 1,
+          "p50": 0.022360920906066895
+        },
+        "hostRuntimeRSSBytes": null,
+        "loadCompletedWork": {
+          "max": 0,
+          "min": 0,
+          "n": 1,
+          "p50": 0
+        },
+        "loadErrors": {
+          "max": 0,
+          "min": 0,
+          "n": 1,
+          "p50": 0
+        },
+        "loadSeconds": null,
+        "processCount": {
+          "max": 1,
+          "min": 1,
+          "n": 1,
+          "p50": 1
+        },
+        "processHighWaterRSSBytes": {
+          "max": 815104,
+          "min": 815104,
+          "n": 1,
+          "p50": 815104
+        },
+        "processRSSBytes": {
+          "max": 815104,
+          "min": 815104,
+          "n": 1,
+          "p50": 815104
+        },
+        "readinessSeconds": null,
+        "setupSeconds": {
+          "max": 22.937684059143066,
+          "min": 22.937684059143066,
+          "n": 1,
+          "p50": 22.937684059143066
+        },
+        "stopSeconds": {
+          "max": 0.022367000579833984,
+          "min": 0.022367000579833984,
+          "n": 1,
+          "p50": 0.022367000579833984
+        }
+      },
+      "records": 2,
+      "statuses": {
+        "blocked-runtime": 1,
+        "measured-with-limitations": 1
+      }
+    },
+    "postgres-api": {
+      "measuredRecords": 1,
+      "metrics": {
+        "blockReadBytes": {
+          "max": 78618624,
+          "min": 78618624,
+          "n": 1,
+          "p50": 78618624
+        },
+        "blockWriteBytes": {
+          "max": 40763392,
+          "min": 40763392,
+          "n": 1,
+          "p50": 40763392
+        },
+        "cgroupMemoryCurrentBytes": {
+          "max": 143790080,
+          "min": 143790080,
+          "n": 1,
+          "p50": 143790080
+        },
+        "cgroupMemoryLimitBytes": null,
+        "cgroupMemoryPeakBytes": {
+          "max": 155275264,
+          "min": 155275264,
+          "n": 1,
+          "p50": 155275264
+        },
+        "cpuPercent": null,
+        "cpuUsageUsec": {
+          "max": 445532,
+          "min": 445532,
+          "n": 1,
+          "p50": 445532
+        },
+        "createSeconds": {
+          "max": 0.45767295360565186,
+          "min": 0.45767295360565186,
+          "n": 1,
+          "p50": 0.45767295360565186
+        },
+        "dbDataFootprintBytes": {
+          "max": 40366080,
+          "min": 40366080,
+          "n": 1,
+          "p50": 40366080
+        },
+        "deleteSeconds": {
+          "max": 0.12904798984527588,
+          "min": 0.12904798984527588,
+          "n": 1,
+          "p50": 0.12904798984527588
+        },
+        "hostRuntimeRSSBytes": null,
+        "loadCompletedWork": {
+          "max": 1,
+          "min": 1,
+          "n": 1,
+          "p50": 1
+        },
+        "loadErrors": {
+          "max": 0,
+          "min": 0,
+          "n": 1,
+          "p50": 0
+        },
+        "loadSeconds": {
+          "max": 0.0447770357131958,
+          "min": 0.0447770357131958,
+          "n": 1,
+          "p50": 0.0447770357131958
+        },
+        "processCount": {
+          "max": 13,
+          "min": 13,
+          "n": 1,
+          "p50": 13
+        },
+        "processHighWaterRSSBytes": {
+          "max": 28688384,
+          "min": 28688384,
+          "n": 1,
+          "p50": 28688384
+        },
+        "processRSSBytes": {
+          "max": 28688384,
+          "min": 28688384,
+          "n": 1,
+          "p50": 28688384
+        },
+        "readinessSeconds": {
+          "max": 1.0829960107803345,
+          "min": 1.0829960107803345,
+          "n": 1,
+          "p50": 1.0829960107803345
+        },
+        "setupSeconds": {
+          "max": 76.68017196655273,
+          "min": 76.68017196655273,
+          "n": 1,
+          "p50": 76.68017196655273
+        },
+        "stopSeconds": {
+          "max": 0.12905800342559814,
+          "min": 0.12905800342559814,
+          "n": 1,
+          "p50": 0.12905800342559814
+        }
+      },
+      "records": 6,
+      "statuses": {
+        "blocked-runtime": 5,
+        "measured-with-limitations": 1
+      }
+    },
+    "postgres-only": {
+      "measuredRecords": 1,
+      "metrics": {
+        "blockReadBytes": {
+          "max": 67395584,
+          "min": 67395584,
+          "n": 1,
+          "p50": 67395584
+        },
+        "blockWriteBytes": {
+          "max": 40755200,
+          "min": 40755200,
+          "n": 1,
+          "p50": 40755200
+        },
+        "cgroupMemoryCurrentBytes": {
+          "max": 130813952,
+          "min": 130813952,
+          "n": 1,
+          "p50": 130813952
+        },
+        "cgroupMemoryLimitBytes": {
+          "max": 18446744073709551615,
+          "min": 18446744073709551615,
+          "n": 1,
+          "p50": 18446744073709551615
+        },
+        "cgroupMemoryPeakBytes": null,
+        "cpuPercent": null,
+        "cpuUsageUsec": {
+          "max": 493887,
+          "min": 493887,
+          "n": 1,
+          "p50": 493887
+        },
+        "createSeconds": {
+          "max": 0.4377000331878662,
+          "min": 0.4377000331878662,
+          "n": 1,
+          "p50": 0.4377000331878662
+        },
+        "dbDataFootprintBytes": {
+          "max": 40366080,
+          "min": 40366080,
+          "n": 1,
+          "p50": 40366080
+        },
+        "deleteSeconds": {
+          "max": 0.10085105895996094,
+          "min": 0.10085105895996094,
+          "n": 1,
+          "p50": 0.10085105895996094
+        },
+        "hostRuntimeRSSBytes": null,
+        "loadCompletedWork": {
+          "max": 1,
+          "min": 1,
+          "n": 1,
+          "p50": 1
+        },
+        "loadErrors": {
+          "max": 0,
+          "min": 0,
+          "n": 1,
+          "p50": 0
+        },
+        "loadSeconds": {
+          "max": 0.04070591926574707,
+          "min": 0.04070591926574707,
+          "n": 1,
+          "p50": 0.04070591926574707
+        },
+        "processCount": {
+          "max": 6,
+          "min": 6,
+          "n": 1,
+          "p50": 6
+        },
+        "processHighWaterRSSBytes": {
+          "max": 27856896,
+          "min": 27856896,
+          "n": 1,
+          "p50": 27856896
+        },
+        "processRSSBytes": {
+          "max": 27856896,
+          "min": 27856896,
+          "n": 1,
+          "p50": 27856896
+        },
+        "readinessSeconds": {
+          "max": 1.096068024635315,
+          "min": 1.096068024635315,
+          "n": 1,
+          "p50": 1.096068024635315
+        },
+        "setupSeconds": {
+          "max": 90.2369270324707,
+          "min": 90.2369270324707,
+          "n": 1,
+          "p50": 90.2369270324707
+        },
+        "stopSeconds": {
+          "max": 0.10085999965667725,
+          "min": 0.10085999965667725,
+          "n": 1,
+          "p50": 0.10085999965667725
+        }
+      },
+      "records": 2,
+      "statuses": {
+        "blocked-runtime": 1,
+        "measured-with-limitations": 1
+      }
+    }
+  },
+  "schemaVersion": "linuxpod-base-overhead-summary/v1",
+  "statuses": {
+    "blocked-runtime": 7,
+    "measured-with-limitations": 3
+  }
+}

@@ -1,0 +1,49 @@
+// swift-tools-version: 6.2
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Burak Karahan
+
+import PackageDescription
+
+let package = Package(
+    name: "container-compose-adapter",
+    platforms: [
+        .macOS(.v15)
+    ],
+    products: [
+        .library(
+            name: "ContainerComposeAdapter",
+            targets: ["ContainerComposeAdapter"]
+        ),
+        .executable(
+            name: "container-compose-adapter",
+            targets: ["ContainerComposeAdapterCLI"]
+        )
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/containerization.git", exact: "0.26.5"),
+        .package(url: "https://github.com/apple/swift-system.git", from: "1.4.0")
+    ],
+    targets: [
+        .target(name: "ContainerComposeAdapter"),
+        .target(
+            name: "ContainerComposeAdapterLinuxPod",
+            dependencies: [
+                "ContainerComposeAdapter",
+                .product(name: "Containerization", package: "containerization"),
+                .product(name: "ContainerizationEXT4", package: "containerization"),
+                .product(name: "SystemPackage", package: "swift-system")
+            ]
+        ),
+        .executableTarget(
+            name: "ContainerComposeAdapterCLI",
+            dependencies: [
+                "ContainerComposeAdapter",
+                "ContainerComposeAdapterLinuxPod"
+            ]
+        ),
+        .testTarget(
+            name: "ContainerComposeAdapterTests",
+            dependencies: ["ContainerComposeAdapter"]
+        )
+    ]
+)

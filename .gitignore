@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+__pycache__/
+*.pyc
+.container-compose-adapter/
+docs/evidence/linuxpod-base-overhead/runtime/

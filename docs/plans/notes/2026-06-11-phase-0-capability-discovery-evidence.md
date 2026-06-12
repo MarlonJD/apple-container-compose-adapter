@@ -1,24 +1,27 @@
 # Phase 0 Capability Discovery Evidence
 
 **Date:** 2026-06-11
-**Linked plan:** [Efficiency And Shared Runtime Pilot Plan](../2026-06-11-efficiency-and-shared-runtime-pilot-plan.md)
+**Linked plan:** [Efficiency And Shared Runtime Pilot Plan](../completed/2026-06-11-efficiency-and-shared-runtime-pilot-plan.md)
 **Scope:** No-side-effect baseline context, Docker/OrbStack availability, Apple `container` availability, and official shared-runtime feasibility evidence.
 
 ## Phase 0 Verdict
 
-- Local Apple `container` CLI evidence is `skipped-runtime-unavailable`: `command -v container`, `container --version`, and `container --help` all showed that `container` is not installed in the current PATH.
+- Local Apple `container` CLI evidence was refreshed after installation: `container` is now present at `/usr/local/bin/container`, with CLI version `1.0.0` build `release`, commit `ee848e3`.
+- Apple `container` runtime service evidence is still not ready for measurement: `container system status` reports that the apiserver is not running and is not registered with launchd. The pilot did not run `container system start`.
 - Docker/OrbStack baseline context is available: the active Docker context is `orbstack`, Docker client/server queries succeed, and Docker Compose is installed. No Compose project was run.
 - Official Apple docs inspected in Phase 0 describe the native `container`/`containerization` model as one lightweight VM per Linux container.
 - No official pod-like or Docker-host-style shared OCI container runtime primitive was found in the inspected Apple `container` CLI docs or `containerization` README.
 - `container machine` is an official primitive for a persistent Linux environment that can run commands and system services inside one VM. It is not, based on inspected docs, a Compose-equivalent shared runtime for multiple isolated OCI service containers with separate lifecycle, logs, networking, and cleanup.
 
-This phase is not a go/no-go recommendation yet. It establishes that Phase 1 needs a dry-run evidence schema and explicit `skipped-runtime-unavailable` handling before any runtime measurements or mutating commands.
+This phase is not a go/no-go recommendation yet. It establishes that Phase 1 needs a dry-run evidence schema and explicit status handling for `cli-available-service-stopped`, `measured`, `skipped-runtime-unavailable`, and `blocked` before any runtime measurements or mutating commands.
 
 ## Command Safety
 
 No command intentionally created, started, stopped, pulled, removed, pruned, or mutated containers, images, networks, or volumes.
 
 One attempted read-only command, `orb version`, unexpectedly tried to `chmod` OrbStack's local run directory and failed under the sandbox. It was not escalated because Phase 0 only needed non-mutating availability evidence.
+
+After Apple `container` was installed, several read-only `container` system and help commands needed to be retried outside the app sandbox because the sandbox returned `Operation not permitted` for XPC-backed queries. The retried commands were still read-only. No `container system start`, image pull, build, run, network create, volume create, or cleanup command was run.
 
 ## Local Machine Context
 
@@ -57,11 +60,30 @@ Interpretation: Docker/OrbStack is available enough for future baseline measurem
 
 | Command | Expected no-side-effect behavior | Actual result |
 | --- | --- | --- |
-| `command -v container` | Locate Apple `container` CLI only. | Exit code `1`; no binary found in PATH. |
-| `container --version` | Print CLI version if installed. | Exit code `127`; command not found. |
-| `container --help` | Print local command surface if installed. | Exit code `127`; command not found. |
+| `command -v container` | Locate Apple `container` CLI only. | `/usr/local/bin/container`. |
+| `container --version` | Print CLI version if installed. | `container CLI version 1.0.0 (build: release, commit: ee848e3)`. |
+| `container --help` | Print local command surface if installed. | Top-level help printed container, image, machine, volume, builder, network, and system subcommand groups. It also reported `PLUGINS: not available, run container system start`. |
+| `container system status` | Read service status. | Outside the sandbox: `apiserver is not running and not registered with launchd`. |
+| `container system version` | Read CLI/API server version information. | CLI row returned version `1.0.0`, build `release`, commit `ee848e3ebfd7c73b04dd419683be54fb450b8779`. No server row was present. |
+| `container system df` | Read disk usage for images, containers, and volumes. | Failed because the service is not started: XPC connection invalid and guidance to run `container system start`. |
+| `container list --all` | Read container list. | Failed because the service is not started: XPC connection invalid and guidance to run `container system start`. |
+| `container network list` | Read network list. | Failed because the service is not started: XPC connection invalid and guidance to run `container system start`. |
+| `container volume list` | Read volume list. | Failed because the service is not started: XPC connection invalid and guidance to run `container system start`. |
 
-Local help output for build, run, network, volume, exec, logs, status/list, and system commands could not be captured because the CLI is unavailable. Phase 0 therefore used official Apple docs as the capability reference.
+Subcommand-specific help was captured through `container help ...` outside the app sandbox. Direct forms such as `container run --help` returned only top-level help in this environment.
+
+## Local Capability Surface After Install
+
+| Area | Local help evidence | Phase 0 implication |
+| --- | --- | --- |
+| Build | `container help build` shows Dockerfile/Containerfile build support with build args, file path, labels, memory/CPU, output type, platform, secrets, tags, target, DNS options, and pull flag. | Build capability exists at the CLI surface, but no build was run. Measurement still requires service startup approval and a dry-run harness first. |
+| Run | `container help run` shows env/env-file, user/workdir, CPU/memory, labels, mounts, name, network, publish, publish-socket, read-only, remove, Rosetta, runtime, SSH, tmpfs, volume, and virtualization flags. | Single-container execution surface is rich enough to map many Compose fields, but runtime behavior is unmeasured. |
+| Network | `container help network` shows create/delete/list/inspect/prune. `container help network create` exposes internal, label, option, plugin, subnet, and IPv6 subnet flags. | Network management surface exists; service-name DNS and multi-service connectivity remain unmeasured. |
+| Volume | `container help volume` shows create/delete/list/inspect/prune. `container help volume create` exposes labels, driver options, and size. | Named volume surface exists; persistence and cleanup behavior remain unmeasured. |
+| Exec/logs | `container help exec` and `container help logs` show exec process flags and log follow/tail/boot options. | Developer workflow primitives exist at the CLI surface. |
+| Status/list | There is no standalone `container status` command in local help. `container help list` and `container help stats` provide list and resource usage surfaces. | Adapter `status` should compose list/inspect/stats rather than assuming native `status`. |
+| System | `container help system` shows df, dns, kernel, logs, property, start, status, stop, and version. `container help system status` and `container help system df` show formatted read options. | Useful read-only system probes exist, but runtime service is currently stopped/unregistered. |
+| Machine | `container help machine` shows create/delete/inspect/list/logs/run/set/set-default/stop and examples for running commands inside a container machine. | `container machine` remains a Linux-environment primitive, not documented evidence of Compose-style shared OCI service containers. |
 
 ## Official Apple Documentation Evidence
 
@@ -107,15 +129,15 @@ The closest official primitive is `container machine`, but the documented abstra
 - It is useful for Linux development and may be a future research path for running several processes in one VM.
 - It does not, from the inspected docs, preserve separate OCI container roots, per-service image lifecycle, Compose-style service cleanup, container logs, container stats, or service-name network semantics for multiple services inside one shared VM.
 
-Decision implication: treat official shared-runtime support as not found in Phase 0. Do not claim shared-runtime feasibility unless Phase 4 later proves a supported `containerization` API pattern that preserves Compose service boundaries without becoming a new Docker/OrbStack-like runtime.
+Decision implication from Phase 0 docs/help: treat official `container` CLI shared-runtime support as not found. Later Phase 4 source/API inspection found a lower-level `containerization` `LinuxPod` API, but that is not exposed through the `container` CLI and remains a separate research path until prototyped.
 
 ## Commands Not Fully Captured
 
-- Local Apple `container` help surfaces were not captured because `container` is not installed.
+- Runtime resource snapshots were not captured because the Apple `container` apiserver is not running and is not registered with launchd. The pilot did not start it.
 - `sysctl` hardware fields were blocked by the sandbox; replaced by `system_profiler`.
 - OrbStack CLI version was not captured because `orb version` attempted a sandbox-denied directory permission change.
 - OrbStack process list was not captured because process-list access is blocked by the app sandbox.
 
 ## Next Todo For Phase 1
 
-Define the measurement evidence schema and no-mutation harness contract, including command metadata, redaction, resource snapshot strategy, `measured` versus `skipped-runtime-unavailable` status, and an explicit rule that dry-run-only harness behavior lands before any runtime mutation.
+Define the measurement evidence schema and no-mutation harness contract, including command metadata, redaction, resource snapshot strategy, `cli-available-service-stopped`, `measured`, `skipped-runtime-unavailable`, and `blocked` statuses, plus an explicit rule that dry-run-only harness behavior lands before any runtime mutation.

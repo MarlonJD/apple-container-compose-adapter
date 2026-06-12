@@ -4,11 +4,24 @@
 
 **Date:** 2026-06-11
 **Owner subtree:** `tools/apple-container-compose-adapter`
-**Goal:** Build Container Compose Adapter as a macOS developer tool that reads Docker Compose-style YAML intent and translates it into the closest safe, practical execution through Apple's `container` CLI without claiming to be an official or complete Docker Compose replacement. The project must eventually support an OrbStackless daily development path for stacks that fit its documented compatibility subset.
+**Goal:** Build Container Compose Adapter as a macOS developer tool that reads Docker Compose-style YAML intent and translates it into the closest safe, practical execution through a documented runtime backend without claiming to be an official or complete Docker Compose replacement. The project must eventually support an OrbStackless daily development path for stacks that fit its documented compatibility subset.
 **Architecture:** Keep Compose parsing, compatibility planning, command rendering, runtime execution, state tracking, build orchestration, and readiness gating as separate modules so behavior can be tested without mutating the host. Make dry-run output the primary contract before enabling real runtime actions.
 **Tech stack proposal:** Swift Package Manager CLI, XCTest, Foundation `Process` for argv-based execution, and an AGPL-compatible structured YAML parser after dependency license review. No implementation dependency is added by this planning artifact.
 
 ---
+
+## Status Update: 2026-06-12 Runtime Strategy Pivot
+
+This plan is superseded for its public Apple `container` CLI runtime target by
+the [LinuxPod Compose Runtime Backend Implementation Plan](2026-06-12-linuxpod-compose-runtime-backend-plan.md).
+
+Keep the parser, normalizer, compatibility analyzer, dry-run, diagnostics,
+redaction, and state-management concepts from this plan as reusable adapter
+architecture. Do not start the public Apple `container` CLI executor path as
+the main efficiency strategy unless a later decision explicitly re-approves it.
+The replacement target is Docker/OrbStack-backed Docker Compose, not the public
+Apple CLI. Beating public Apple CLI metrics is not sufficient evidence for
+OrbStackless daily-development readiness.
 
 ## Objective
 
@@ -70,16 +83,72 @@ This plan covers the first complete implementation path for a local developer wo
 ## Assumptions
 
 - Docker Compose behavior is the compatibility reference.
-- Apple's `container` CLI is the runtime target.
+- Historical pre-pivot assumption: Apple's `container` CLI was the runtime
+  target. As of the 2026-06-12 strategy pivot, this is superseded for runtime
+  execution by the LinuxPod-first backend plan; use the public CLI only as a
+  fallback, capability probe, or negative control unless a later decision
+  explicitly re-approves it.
 - "OrbStackless daily development" means the documented smoke path passes without Docker, Docker Compose, Docker Desktop, or OrbStack running. Docker/OrbStack may remain a fallback until that gate is proven.
 - The first implementation should optimize for Apple silicon and recent macOS developer machines.
-- The current planning environment may not have `container` installed; execution must therefore support skipped runtime smoke evidence while still requiring parser, planner, renderer, and CLI tests.
+- Some planning environments may not have `container` installed. The 2026-06-11 pilot environment has Apple `container` CLI `1.0.0` installed, but its apiserver is stopped/unregistered. Execution must therefore support missing-runtime, stopped-service, and skipped runtime smoke evidence while still requiring parser, planner, renderer, and CLI tests.
 - Runtime capabilities and CLI flags should be discovered from the installed `container` binary during implementation rather than hardcoded from memory.
 - A structured YAML parser is required; ad hoc string parsing is not acceptable for Compose files.
 - Any third-party dependency must be reviewed for AGPL-3.0-or-later compatibility before being added.
 - New source files should include SPDX and copyright headers when local style allows:
   - `SPDX-License-Identifier: AGPL-3.0-or-later`
   - `Copyright (C) 2026 Burak Karahan`
+
+## Pilot Decision Update
+
+The [Efficiency Pilot Decision Report](notes/2026-06-11-efficiency-pilot-decision-report.md) recommends proceeding with a narrower implementation path based on measured Docker/OrbStack and Apple `container` pilot evidence.
+
+Historical implications before the 2026-06-12 LinuxPod pivot:
+
+- The pre-pivot implementation would have started with the dry-run-first public
+  Apple `container` CLI adapter path.
+- Simple public web workloads are promising on cached Apple `container` runs, but first-run setup requires `container system start`, recommended kernel install, and init image fetch.
+- The pre-pivot evidence did not justify claiming backend-shaped Apple
+  `container` stacks were faster, lighter, or ready to replace OrbStack before
+  service discovery, named volume compatibility, resource sizing, health
+  polling, idempotency, and job log/status capture were implemented and
+  remeasured.
+- The pre-pivot plan did not allow an OrbStackless daily-development readiness
+  claim until its readiness gate passed.
+- The reusable architecture from pre-pivot Phases 0 through 4 is the
+  no-side-effect CLI foundation, parser/normalizer, diagnostics, execution
+  planning, dry-run rendering, and command rendering test strategy.
+- The pre-pivot runtime executor path was guarded behind dry-run tests and
+  explicit approval gates, with simple-web as the first runtime path and
+  backend-shaped behavior only after documented diagnostics/workarounds.
+- The pre-pivot plan treated `containerization` `LinuxPod` as a possible future
+  shared-runtime research track because it is not exposed by the public
+  `container` CLI. That direction is superseded by the active LinuxPod-first
+  backend plan.
+
+Current implication after the 2026-06-12 pivot: do not use the historical
+public CLI bullets above to start runtime executor work. Reuse only the
+runtime-neutral CLI, parser, normalizer, diagnostics, planning, dry-run,
+redaction, and state-management architecture in the active
+[LinuxPod Compose Runtime Backend Implementation Plan](2026-06-12-linuxpod-compose-runtime-backend-plan.md).
+
+## Runtime Efficiency Benchmark Update
+
+The [Runtime Efficiency Benchmark Evidence](notes/2026-06-11-runtime-efficiency-benchmark-evidence.md) adds repeated cached-image Docker/OrbStack versus Apple `container` measurements before implementation starts.
+
+Decision impact:
+
+- Apple `container` is promising for cached simple-web startup and modestly lower simple-web memory.
+- Apple `container` does not currently prove a broad efficiency win over Docker/OrbStack. DB and backend DB runtime/cgroup memory are much higher on Apple, while Postgres process RSS and DB disk footprint are effectively the same.
+- Apple DB scenarios show substantially higher block-read I/O than the Docker/OrbStack baseline in the measured workload.
+- Apple lower CPU snapshots cannot be treated as efficiency wins where the same run completed less work or had load-loop timeouts.
+- Backend-shaped Apple measurements remain `measured-with-workarounds`, not Compose parity, because service-name DNS and direct Postgres named-volume behavior differ from Docker Compose.
+
+Implementation guardrails:
+
+- `doctor`, README, and compatibility docs must not claim that Apple `container` is broadly faster, lighter, or ready to replace Docker/OrbStack for backend stacks.
+- Runtime executor work should continue to start with simple-web smoke coverage only.
+- Backend execution must remain gated behind explicit diagnostics for service discovery, named volumes, idempotency, health polling, one-off job capture, and resource sizing.
+- If runtime efficiency becomes the primary product premise, create a separate benchmark/research plan for Apple `container` resource flags and lower-level `containerization` `LinuxPod` before investing heavily in backend execution.
 
 ## Architecture Proposal
 
