@@ -1047,6 +1047,21 @@ final class RuntimeContractTests: XCTestCase {
         )
     }
 
+    func testStage8BenchmarkEvidenceValidatorRejectsMarkerOnlyPodReuse() {
+        let markerOnly = completeStage8IterationRecord(
+            lifecycleMode: .allWarmProjectRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean",
+            podReuseVerificationStatus: "markerFile"
+        )
+
+        XCTAssertEqual(
+            Set(Stage8BenchmarkEvidenceValidator().validate(records: [markerOnly]).map(\.code)),
+            ["stage8-pod-reuse-unverified"]
+        )
+    }
+
     func testPhase6SeedImageStorePolicyRequiresSentinelAndProtectsExternalSources() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("cca-seed-policy-\(UUID().uuidString)", isDirectory: true)
@@ -2172,6 +2187,7 @@ final class RuntimeContractTests: XCTestCase {
         initfsCacheStatus: BenchmarkCacheStatus,
         volumeExistedBeforeRun: Bool = false,
         podExistedBeforeRun: Bool = false,
+        podReuseVerificationStatus: String? = nil,
         hostPortProbeStatus: String = "notMeasured",
         loadWindowStatus: String = "notMeasured"
     ) -> BenchmarkRunMetadata {
@@ -2189,6 +2205,7 @@ final class RuntimeContractTests: XCTestCase {
             seedImageStoreValidated: seedImageStoreCopied,
             projectRuntimeExistedBeforeRun: podExistedBeforeRun || volumeExistedBeforeRun,
             podExistedBeforeRun: podExistedBeforeRun,
+            podReuseVerificationStatus: podReuseVerificationStatus,
             imageCacheStatus: imageCacheStatus,
             rootfsCacheStatus: rootfsCacheStatus,
             initfsCacheStatus: initfsCacheStatus,
@@ -2203,7 +2220,8 @@ final class RuntimeContractTests: XCTestCase {
         lifecycleMode: BenchmarkLifecycleMode,
         iteration: Int,
         cleanupStateDirectoryExistsAfterCleanup: Bool,
-        cleanupResult: String
+        cleanupResult: String,
+        podReuseVerificationStatus: String? = nil
     ) -> Phase6BenchmarkIterationRecord {
         Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T13:10:0\(iteration)Z",
@@ -2217,7 +2235,8 @@ final class RuntimeContractTests: XCTestCase {
                 rootfsCacheStatus: .hit,
                 initfsCacheStatus: .hit,
                 volumeExistedBeforeRun: true,
-                podExistedBeforeRun: true
+                podExistedBeforeRun: true,
+                podReuseVerificationStatus: podReuseVerificationStatus
             ),
             status: .measured,
             durationsSeconds: Phase6BenchmarkDurations(

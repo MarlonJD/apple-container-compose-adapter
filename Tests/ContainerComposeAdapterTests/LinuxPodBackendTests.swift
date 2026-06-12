@@ -93,7 +93,8 @@ final class LinuxPodBackendTests: XCTestCase {
 
         let createRuntime = try XCTUnwrap(result.actions.first { $0.kind == .createProjectRuntime })
         XCTAssertEqual(createRuntime.metadata["podMarker"], bootLog.path)
-        XCTAssertEqual(createRuntime.metadata["podLifecycle"], "reuse")
+        XCTAssertEqual(createRuntime.metadata["podMarkerStatus"], "present-unverified")
+        XCTAssertEqual(createRuntime.metadata["podLifecycle"], "candidate-reuse-unverified")
         XCTAssertEqual(createRuntime.metadata["hotplugPolicy"], "reuse-existing-pod-or-register-before-create")
 
         let addContainer = try XCTUnwrap(result.actions.first { $0.kind == .addContainer })

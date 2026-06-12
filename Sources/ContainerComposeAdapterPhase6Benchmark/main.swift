@@ -237,17 +237,20 @@ struct Phase6BenchmarkHarness {
             plan: plan,
             backend: backend,
             projectDirectory: projectDirectory,
-            seedResult: seedResult
+            seedResult: seedResult,
+            podExistedBeforeRun: false
         )
 
         do {
+            let podExistedBeforeRun = await executor.hasCreatedPod(project: projectResource)
             seedResult = try await seedImageStoreIfRequested(options: options, plan: plan, backend: backend)
             environment = benchmarkEnvironment(
                 options: options,
                 plan: plan,
                 backend: backend,
                 projectDirectory: projectDirectory,
-                seedResult: seedResult
+                seedResult: seedResult,
+                podExistedBeforeRun: podExistedBeforeRun
             )
             let upStarted = Date()
             let up = try await backend.execute(
@@ -532,7 +535,8 @@ private func benchmarkEnvironment(
     plan: RuntimePlan,
     backend: LinuxPodBackend,
     projectDirectory: URL,
-    seedResult: SeedImageStoreCopyResult
+    seedResult: SeedImageStoreCopyResult,
+    podExistedBeforeRun: Bool
 ) -> BenchmarkRunMetadata {
     let imageStatuses = plan.services.map { service in
         cacheStatus(path: backend.stateStore.rootfsCachePath(image: service.image).path)
@@ -560,9 +564,8 @@ private func benchmarkEnvironment(
         projectRuntimeExistedBeforeRun: projectRuntimeDirectoryExistedBeforeRun,
         projectRuntimeDirectoryExistedBeforeSeed: seedResult.projectRuntimeDirectoryExistedBeforeSeed,
         projectRuntimeDirectoryExistedBeforeRun: projectRuntimeDirectoryExistedBeforeRun,
-        podExistedBeforeRun: FileManager.default.fileExists(
-            atPath: runtimeDirectory.appendingPathComponent("boot.log").path
-        ),
+        podExistedBeforeRun: podExistedBeforeRun,
+        podReuseVerificationStatus: podExistedBeforeRun ? "liveExecutorState" : "notApplicable",
         imageCacheStatus: seedResult.imageCacheStatus,
         rootfsCacheStatus: rootfsStatus,
         initfsCacheStatus: cacheStatus(path: backend.stateStore.initfsCachePath().path),

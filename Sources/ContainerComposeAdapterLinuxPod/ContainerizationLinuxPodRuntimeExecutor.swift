@@ -106,6 +106,10 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         }
     }
 
+    public func hasCreatedPod(project: String) -> Bool {
+        states[project]?.podCreated == true
+    }
+
     public func guestStatistics(project: String) async throws -> HostFootprintGuestStats {
         guard let state = states[project], state.podCreated else {
             throw RuntimeBackendError.runtimeUnavailable(

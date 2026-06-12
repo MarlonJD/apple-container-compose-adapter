@@ -160,6 +160,7 @@ public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
     public let projectRuntimeDirectoryExistedBeforeSeed: Bool
     public let projectRuntimeDirectoryExistedBeforeRun: Bool
     public let podExistedBeforeRun: Bool
+    public let podReuseVerificationStatus: String?
     public let imageCacheStatus: BenchmarkCacheStatus
     public let rootfsCacheStatus: BenchmarkCacheStatus
     public let initfsCacheStatus: BenchmarkCacheStatus
@@ -193,6 +194,7 @@ public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
         case projectRuntimeDirectoryExistedBeforeSeed
         case projectRuntimeDirectoryExistedBeforeRun
         case podExistedBeforeRun
+        case podReuseVerificationStatus
         case imageCacheStatus
         case rootfsCacheStatus
         case initfsCacheStatus
@@ -225,6 +227,7 @@ public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
         projectRuntimeDirectoryExistedBeforeSeed: Bool = false,
         projectRuntimeDirectoryExistedBeforeRun: Bool? = nil,
         podExistedBeforeRun: Bool = false,
+        podReuseVerificationStatus: String? = nil,
         imageCacheStatus: BenchmarkCacheStatus,
         rootfsCacheStatus: BenchmarkCacheStatus,
         initfsCacheStatus: BenchmarkCacheStatus,
@@ -268,6 +271,7 @@ public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
         self.projectRuntimeDirectoryExistedBeforeSeed = projectRuntimeDirectoryExistedBeforeSeed
         self.projectRuntimeDirectoryExistedBeforeRun = directoryBeforeRun
         self.podExistedBeforeRun = podExistedBeforeRun
+        self.podReuseVerificationStatus = podReuseVerificationStatus ?? (podExistedBeforeRun ? "liveExecutorState" : "notApplicable")
         self.imageCacheStatus = imageCacheStatus
         self.rootfsCacheStatus = rootfsCacheStatus
         self.initfsCacheStatus = initfsCacheStatus
@@ -533,6 +537,10 @@ public struct Stage8BenchmarkEvidenceValidator: Sendable {
         if classified != mode {
             diagnostics.append(blocking("stage8-lifecycle-mode-cache-mismatch", "Stage 8 lifecycle mode does not match cache/reuse metadata."))
         }
+        if Self.requiresLivePodReuse(mode),
+           environment.podReuseVerificationStatus != "liveExecutorState" {
+            diagnostics.append(blocking("stage8-pod-reuse-unverified", "Stage 8 pod warm-reuse evidence must be verified from live executor state, not marker files alone."))
+        }
         if environment.hostPortTTFBSeconds == nil && environment.hostPortProbeStatus != "notMeasured" {
             diagnostics.append(blocking("stage8-host-port-not-measured-missing", "Missing host-port TTFB must be marked notMeasured."))
         }
@@ -594,6 +602,19 @@ public struct Stage8BenchmarkEvidenceValidator: Sendable {
     }
 
     private static let validLifecycleModeIDs = Set(BenchmarkLifecycleMode.allCases.map(\.id))
+
+    private static func requiresLivePodReuse(_ mode: BenchmarkLifecycleMode) -> Bool {
+        switch mode {
+        case .persistentPodHotplug, .allWarmProjectRuntime:
+            return true
+        case .coldRuntime,
+             .imageStoreSeededFreshRuntime,
+             .rootfsCacheHitRuntime,
+             .initfsCacheHitRuntime,
+             .warmPreservedVolume:
+            return false
+        }
+    }
 
     private static func isWarmReusePreservedCleanup(_ record: Phase6BenchmarkIterationRecord) -> Bool {
         guard record.cleanupResult == "preserved-volume-for-warm-reuse"

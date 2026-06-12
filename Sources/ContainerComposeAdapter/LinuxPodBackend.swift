@@ -418,6 +418,7 @@ public struct LinuxPodBackend: RuntimeBackend {
 
     private func projectRuntimeMetadata(_ plan: RuntimePlan) -> [String: String] {
         let podMarker = stateStore.podMarkerPath(project: plan.project)
+        let markerExists = FileManager.default.fileExists(atPath: podMarker.path)
         return [
             "state": stateStore.runtimeDirectory(for: plan.project).path,
             "hosts": serviceHostsMetadata(plan),
@@ -425,7 +426,8 @@ public struct LinuxPodBackend: RuntimeBackend {
             "initfsCache": stateStore.initfsCachePath().path,
             "initfsCacheStatus": cacheStatus(stateStore.initfsCachePath()),
             "podMarker": podMarker.path,
-            "podLifecycle": FileManager.default.fileExists(atPath: podMarker.path) ? "reuse" : "create",
+            "podMarkerStatus": markerExists ? "present-unverified" : "missing",
+            "podLifecycle": markerExists ? "candidate-reuse-unverified" : "create",
             "hotplugPolicy": "reuse-existing-pod-or-register-before-create"
         ]
     }
