@@ -11,7 +11,7 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(readme.contains("Mcrich23/Container-Compose"))
         XCTAssertTrue(readme.contains("persistent LinuxPod project runtime"))
         XCTAssertTrue(readme.contains("Docker Compose files are the primary input"))
-        XCTAssertTrue(readme.contains("Kubernetes is a future local-development input subset"))
+        XCTAssertTrue(readme.contains("Kubernetes is a local-development input subset"))
         XCTAssertTrue(readme.contains("Microsoft WSL container is an optimization reference only"))
         XCTAssertTrue(readme.contains("does not claim host RAM savings"))
     }
@@ -38,14 +38,16 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(doc.contains("cca-agent"))
     }
 
-    func testKubernetesDocsStayFutureInputSubsetNotFullKubernetes() throws {
+    func testKubernetesDocsStayInputSubsetNotFullKubernetes() throws {
         let doc = try readText("docs/kubernetes-input-subset.md")
 
-        XCTAssertTrue(doc.contains("future input/frontend"))
+        XCTAssertTrue(doc.contains("an input/frontend feature"))
         XCTAssertTrue(doc.contains("not a full Kubernetes distribution"))
         XCTAssertTrue(doc.contains("CRDs"))
         XCTAssertTrue(doc.contains("kubectl-compatible API server"))
         XCTAssertTrue(doc.contains("production Kubernetes conformance"))
+        XCTAssertTrue(doc.contains("cca.local/depends-on"))
+        XCTAssertTrue(doc.contains("--k8s-file"))
     }
 
     func testStage4CloseoutAdvancesRoadmapAndDocumentsRuntimeEvidenceGap() throws {

@@ -2,20 +2,20 @@
 
 ## Product Rule
 
-Kubernetes support is a future input/frontend feature. It is not a full Kubernetes distribution, not a production cluster, and not a kubelet/controller/scheduler replacement.
+Kubernetes support is an input/frontend feature. It is not a full Kubernetes distribution, not a production cluster, and not a kubelet/controller/scheduler replacement.
 
-The supported path is:
+The implemented path is:
 
 ```text
 Kubernetes YAML / Helm template output / Kustomize output
         -> KubernetesSubsetFrontend
         -> LocalDevProject IR
         -> AppleNativePlanner
-        -> LinuxPodProjectRuntime
+        -> LinuxPod runtime plan
 ```
 
-The tool should consume rendered YAML. It should not implement Helm or
-Kustomize internally in the first phase.
+The tool consumes rendered YAML. It does not implement Helm or Kustomize
+internally in this phase.
 
 ## First Supported Object Set
 
@@ -53,17 +53,24 @@ Do not support or claim:
 
 ## Input Modes
 
-Potential CLI shapes:
+Implemented CLI shape:
 
 ```bash
-cca plan -f k8s/dev/
-cca up -f k8s/dev/ --runtime linuxpod
+container-compose-adapter --runtime linuxpod --dry-run \
+  --k8s-file rendered.yaml -p project-name up
+```
+
+`--k8s-file` accepts one rendered multi-document YAML file. Piped stdin,
+directory inputs, and shorthand aliases remain future design examples:
+
+```bash
 helm template ./chart -f values.local.yaml | cca up -f -
 kustomize build overlays/local | cca up -f -
 ```
 
-These commands are design examples. They are not implemented by the current
-CLI.
+The supported render style indents mapping-style sequence items two columns
+past their parent key (the style used by the backend-shaped fixture at
+`docs/evidence/fixtures/backend-shaped/k8s.yaml`).
 
 ## Translation Details
 
@@ -113,17 +120,23 @@ backend service/port -> target service and target port
 
 ## Useful Local Annotations
 
-Possible project-specific annotations:
+Implemented annotations:
 
 ```yaml
 metadata:
   annotations:
-    cca.local/host-port: "8080"
-    cca.local/profile: "dev"
-    cca.local/run-as-job: "true"
-    cca.local/volume-size: "1073741824"
-    cca.local/ignore: "true"
+    cca.local/host-port: "8080"        # Service: deterministic host port
+    cca.local/host-ip: "127.0.0.1"     # Service: host bind address
+    cca.local/depends-on: "db:service_healthy,seed:service_completed_successfully"
+    cca.local/profile: "dev"           # workload/Job: local profile
+    cca.local/ignore: "true"           # any object: skip translation
 ```
+
+`cca.local/depends-on` exists because Kubernetes has no Compose-style
+`depends_on`; it restores explicit local startup ordering with the same
+condition names Compose uses. `cca.local/host-port` requires exactly one
+service port. Future candidates such as `cca.local/run-as-job` and
+`cca.local/volume-size` are not implemented.
 
 Annotations must not imply full Kubernetes behavior. They only tune
 local-development translation.

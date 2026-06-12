@@ -86,15 +86,22 @@ struct ContainerComposeAdapterCommand {
     }
 
     private static func makePlan(_ options: CLIOptions) throws -> RuntimePlan {
-        guard let composeFile = options.composeFile else {
-            let sample = options.samplePlan ?? .publicSmoke
-            return sample.makePlan(project: ProjectName(options.projectName))
+        if let composeFile = options.composeFile {
+            let frontendResult = try ComposeFrontend().parseProject(
+                fileURL: URL(fileURLWithPath: composeFile),
+                projectName: options.projectName
+            )
+            return AppleNativePlanner().plan(frontendResult.project).runtimePlan
         }
-        let frontendResult = try ComposeFrontend().parseProject(
-            fileURL: URL(fileURLWithPath: composeFile),
-            projectName: options.projectName
-        )
-        return AppleNativePlanner().plan(frontendResult.project).runtimePlan
+        if let k8sFile = options.k8sFile {
+            let frontendResult = try KubernetesSubsetFrontend().parseProject(
+                fileURL: URL(fileURLWithPath: k8sFile),
+                projectName: options.projectName
+            )
+            return AppleNativePlanner().plan(frontendResult.project).runtimePlan
+        }
+        let sample = options.samplePlan ?? .publicSmoke
+        return sample.makePlan(project: ProjectName(options.projectName))
     }
 }
 
@@ -109,6 +116,7 @@ private struct CLIOptions {
     var evidenceJSONL: String?
     var samplePlan: SamplePlanKind?
     var composeFile: String?
+    var k8sFile: String?
 
     static func parse(_ args: [String]) throws -> CLIOptions {
         var options = CLIOptions()
@@ -162,6 +170,12 @@ private struct CLIOptions {
                     throw CLIError.usage("--compose-file requires a path")
                 }
                 options.composeFile = args[index]
+            case "--k8s-file":
+                index += 1
+                guard index < args.count else {
+                    throw CLIError.usage("--k8s-file requires a path")
+                }
+                options.k8sFile = args[index]
             case "--help", "-h":
                 throw CLIError.usage(Self.usage())
             default:
@@ -172,15 +186,20 @@ private struct CLIOptions {
             }
             index += 1
         }
-        guard options.composeFile == nil || options.samplePlan == nil else {
-            throw CLIError.usage("--compose-file and --sample are mutually exclusive")
+        let planSources = [
+            options.composeFile != nil,
+            options.k8sFile != nil,
+            options.samplePlan != nil
+        ].filter { $0 }
+        guard planSources.count <= 1 else {
+            throw CLIError.usage("--compose-file, --k8s-file, and --sample are mutually exclusive")
         }
         return options
     }
 
     static func usage() -> String {
         """
-        Usage: container-compose-adapter [--runtime noop-dry-run|linuxpod] [--dry-run] [-p name] [--sample public-smoke|backend-shaped] [--compose-file path] [--format text|json] [--evidence-jsonl path] <doctor|up|down|logs|status|run>
+        Usage: container-compose-adapter [--runtime noop-dry-run|linuxpod] [--dry-run] [-p name] [--sample public-smoke|backend-shaped] [--compose-file path] [--k8s-file path] [--format text|json] [--evidence-jsonl path] <doctor|up|down|logs|status|run>
         """
     }
 }

@@ -1,0 +1,264 @@
+# Rendered Kubernetes manifests for the public backend-shaped fixture.
+# This file is hand-rendered kubectl/Helm-style output for the
+# KubernetesSubsetFrontend slice. The supported render style indents
+# mapping-style sequence items two columns past their parent key.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backend-shaped
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-config
+  namespace: backend-shaped
+data:
+  POSTGRES_USER: app
+  POSTGRES_DB: app
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-credentials
+  namespace: backend-shaped
+type: Opaque
+data:
+  POSTGRES_PASSWORD: ZGV2X3Bhc3N3b3Jk
+stringData:
+  PGPASSWORD: dev_password
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-data
+  namespace: backend-shaped
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: backend-shaped
+spec:
+  replicas: 1
+  serviceName: db
+  selector:
+    matchLabels:
+      app: db
+  template:
+    metadata:
+      labels:
+        app: db
+    spec:
+      containers:
+        - name: db
+          image: docker.io/library/postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: db-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: db-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - pg_isready -U app -d app
+            initialDelaySeconds: 5
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: db-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  namespace: backend-shaped
+  annotations:
+    cca.local/host-ip: "127.0.0.1"
+    cca.local/host-port: "15432"
+spec:
+  selector:
+    app: db
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: backend-shaped
+  annotations:
+    cca.local/depends-on: "db:service_healthy"
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: docker.io/library/postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: PGPASSWORD
+          command:
+            - sh
+            - -ec
+            - |
+              psql -h db -U app -d app -v ON_ERROR_STOP=1 \
+                -c "create table if not exists pilot_items (id serial primary key, name text not null);"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed
+  namespace: backend-shaped
+  annotations:
+    cca.local/depends-on: "migrate:service_completed_successfully"
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: docker.io/library/postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: PGPASSWORD
+          command:
+            - sh
+            - -ec
+            - |
+              psql -h db -U app -d app -v ON_ERROR_STOP=1 \
+                -c "insert into pilot_items (name) values ('public-fixture') on conflict do nothing;"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: backend-shaped
+  annotations:
+    cca.local/depends-on: "db:service_healthy,seed:service_completed_successfully"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: docker.io/library/python:3.12-alpine
+          command:
+            - python
+            - -c
+            - |
+              import http.server
+              import socket
+              import time
+
+              deadline = time.time() + 30
+              while True:
+                  try:
+                      with socket.create_connection(("db", 5432), timeout=2):
+                          break
+                  except OSError:
+                      if time.time() > deadline:
+                          raise
+                      time.sleep(1)
+
+              class Handler(http.server.BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      if self.path not in ("/", "/ready"):
+                          self.send_response(404)
+                          self.end_headers()
+                          return
+                      body = b"ready\n"
+                      self.send_response(200)
+                      self.send_header("Content-Type", "text/plain")
+                      self.send_header("Content-Length", str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+
+                  def log_message(self, format, *args):
+                      return
+
+              http.server.ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2).read()"
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: backend-shaped
+  annotations:
+    cca.local/host-ip: "127.0.0.1"
+    cca.local/host-port: "18081"
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-local
+  namespace: backend-shaped
+spec:
+  rules:
+    - host: api.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8080

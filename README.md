@@ -52,7 +52,7 @@ backend-shaped local development workloads, using a persistent LinuxPod project 
 service DNS, deterministic ports, healthchecks, one-off jobs, logs/status/exec,
 a recovery/event model, metrics, diagnostics, and safe adapter-owned cleanup.
 
-Docker Compose files are the primary input. Kubernetes is a future local-development input subset, not a full Kubernetes distribution. Docker
+Docker Compose files are the primary input. Kubernetes is a local-development input subset for rendered manifests, not a full Kubernetes distribution. Docker
 Desktop, OrbStack, Colima, Podman, Lima, Rancher Desktop, and Microsoft WSL
 container are comparison baselines or optimization references only. Microsoft WSL container is an optimization reference only, not a backend target. This
 project does not claim host RAM savings without reliable host-level evidence.
@@ -260,6 +260,30 @@ The harness records JSONL iteration and summary rows with guest cgroup memory,
 CPU use, block I/O, timing, failure count, cleanup state, and host physical
 memory status. Host physical memory remains `blocked` until a reliable
 host-side attribution source exists.
+
+## Kubernetes Input Subset
+
+Rendered Kubernetes YAML (kubectl/Helm/Kustomize output) can drive the same
+planner and dry-run surfaces through `--k8s-file`:
+
+```bash
+swift run container-compose-adapter \
+  --runtime linuxpod \
+  --dry-run \
+  --k8s-file docs/evidence/fixtures/backend-shaped/k8s.yaml \
+  -p backend-shaped \
+  up
+```
+
+The `KubernetesSubsetFrontend` translates Deployment, StatefulSet, Service,
+ConfigMap, Secret, Job, PersistentVolumeClaim, Ingress, and Namespace documents
+into `LocalDevProject`. `docs/kubernetes-input-subset.md` documents the
+supported subset, the `cca.local/*` annotations (deterministic host ports,
+dependency ordering, profiles, ignore), the expected render style, and the
+explicit non-goals. Kubernetes support means local-development manifest
+translation only; it is not a cluster, controller, or operator runtime. The
+backend-shaped Kubernetes fixture produces the same runtime plan as the
+Compose fixture, which is verified by tests.
 
 ## Runtime Mutation
 

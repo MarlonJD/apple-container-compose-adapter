@@ -543,7 +543,7 @@ private enum ParsedComposeService {
     case job(LocalDevJob)
 }
 
-private struct OrderedYAMLMap {
+struct OrderedYAMLMap {
     let pairs: [YAMLPair]
 
     init(_ pairs: [YAMLPair]) {
@@ -559,7 +559,7 @@ private struct OrderedYAMLMap {
     }
 }
 
-private struct ComposeYAMLSubsetParser {
+struct ComposeYAMLSubsetParser {
     private let lines: [YAMLLine]
     private var index = 0
 
@@ -646,12 +646,75 @@ private struct ComposeYAMLSubsetParser {
                 }
             } else if rawValue.hasPrefix("|") {
                 values.append(.scalar(parseBlockScalar(parentIndent: line.indent)))
+            } else if Self.isInlineMappingStart(rawValue) {
+                values.append(try parseDashMapping(dashLine: line))
             } else {
                 values.append(try parseInlineValue(rawValue, line: line))
                 index += 1
             }
         }
         return .sequence(values)
+    }
+
+    // Kubernetes-style sequences put the first mapping pair on the dash line
+    // ("- name: db"); continuation pairs sit two columns deeper than the dash.
+    private static func isInlineMappingStart(_ value: String) -> Bool {
+        guard value.first != "\"", value.first != "'", value.first != "[" else {
+            return false
+        }
+        guard let colon = value.firstIndex(of: ":") else {
+            return false
+        }
+        let key = value[..<colon]
+        guard !key.isEmpty,
+              key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" || $0 == "." || $0 == "/" }) else {
+            return false
+        }
+        let afterColon = value.index(after: colon)
+        return afterColon == value.endIndex || value[afterColon] == " "
+    }
+
+    private mutating func parseDashMapping(dashLine: YAMLLine) throws -> YAMLValue {
+        let entryIndent = dashLine.indent + 2
+        var pairs: [YAMLPair] = []
+        var pendingLine: YAMLLine? = YAMLLine(
+            number: dashLine.number,
+            indent: entryIndent,
+            content: String(dashLine.content.dropFirst(2)),
+            raw: dashLine.raw
+        )
+        while true {
+            let line: YAMLLine
+            if let synthesized = pendingLine {
+                line = synthesized
+                pendingLine = nil
+            } else {
+                guard index < lines.count,
+                      lines[index].indent == entryIndent,
+                      !lines[index].content.hasPrefix("- ") else {
+                    break
+                }
+                line = lines[index]
+            }
+            let entry = try splitKeyValue(line)
+            if let rawValue = entry.value {
+                if rawValue.hasPrefix("|") {
+                    let scalar = parseBlockScalar(parentIndent: line.indent)
+                    pairs.append(YAMLPair(key: entry.key, value: .scalar(scalar)))
+                } else {
+                    pairs.append(YAMLPair(key: entry.key, value: try parseInlineValue(rawValue, line: line)))
+                    index += 1
+                }
+            } else {
+                index += 1
+                if index < lines.count, lines[index].indent > line.indent {
+                    pairs.append(YAMLPair(key: entry.key, value: try parseNode(indent: lines[index].indent)))
+                } else {
+                    pairs.append(YAMLPair(key: entry.key, value: .mapping([])))
+                }
+            }
+        }
+        return .mapping(pairs)
     }
 
     private func splitKeyValue(_ line: YAMLLine) throws -> (key: String, value: String?) {
@@ -745,19 +808,19 @@ private struct ComposeYAMLSubsetParser {
     }
 }
 
-private struct YAMLLine {
+struct YAMLLine {
     let number: Int
     let indent: Int
     let content: String
     let raw: String
 }
 
-private struct YAMLPair {
+struct YAMLPair {
     let key: String
     let value: YAMLValue
 }
 
-private indirect enum YAMLValue {
+indirect enum YAMLValue {
     case mapping([YAMLPair])
     case sequence([YAMLValue])
     case scalar(String)
@@ -813,7 +876,7 @@ private indirect enum YAMLValue {
     }
 }
 
-private func unquote(_ value: String) -> String {
+func unquote(_ value: String) -> String {
     if value.count >= 2, value.first == "\"", value.last == "\"" {
         let body = value.dropFirst().dropLast()
         return body
