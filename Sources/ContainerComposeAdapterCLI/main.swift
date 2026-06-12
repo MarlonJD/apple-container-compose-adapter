@@ -37,7 +37,7 @@ struct ContainerComposeAdapterCommand {
         guard let command = AdapterCommand(rawValue: options.command.rawValue) else {
             throw CLIError.usage("unsupported command: \(options.command.rawValue)")
         }
-        let plan = options.samplePlan.makePlan(project: ProjectName(options.projectName))
+        let plan = try makePlan(options)
         let backend: any RuntimeBackend = options.runtime == .linuxpod
             ? LinuxPodBackend(runtimeExecutor: ContainerizationLinuxPodRuntimeExecutor())
             : NoopDryRunBackend()
@@ -84,6 +84,18 @@ struct ContainerComposeAdapterCommand {
             print(result.renderText())
         }
     }
+
+    private static func makePlan(_ options: CLIOptions) throws -> RuntimePlan {
+        guard let composeFile = options.composeFile else {
+            let sample = options.samplePlan ?? .publicSmoke
+            return sample.makePlan(project: ProjectName(options.projectName))
+        }
+        let frontendResult = try ComposeFrontend().parseProject(
+            fileURL: URL(fileURLWithPath: composeFile),
+            projectName: options.projectName
+        )
+        return AppleNativePlanner().plan(frontendResult.project).runtimePlan
+    }
 }
 
 private struct CLIOptions {
@@ -95,7 +107,8 @@ private struct CLIOptions {
     var format: OutputFormat = .text
     var approvalToken: String?
     var evidenceJSONL: String?
-    var samplePlan: SamplePlanKind = .publicSmoke
+    var samplePlan: SamplePlanKind?
+    var composeFile: String?
 
     static func parse(_ args: [String]) throws -> CLIOptions {
         var options = CLIOptions()
@@ -143,6 +156,12 @@ private struct CLIOptions {
                     throw CLIError.usage("--sample must be public-smoke or backend-shaped")
                 }
                 options.samplePlan = sample
+            case "--compose-file":
+                index += 1
+                guard index < args.count else {
+                    throw CLIError.usage("--compose-file requires a path")
+                }
+                options.composeFile = args[index]
             case "--help", "-h":
                 throw CLIError.usage(Self.usage())
             default:
@@ -153,12 +172,15 @@ private struct CLIOptions {
             }
             index += 1
         }
+        guard options.composeFile == nil || options.samplePlan == nil else {
+            throw CLIError.usage("--compose-file and --sample are mutually exclusive")
+        }
         return options
     }
 
     static func usage() -> String {
         """
-        Usage: container-compose-adapter [--runtime noop-dry-run|linuxpod] [--dry-run] [-p name] [--sample public-smoke|backend-shaped] [--format text|json] [--evidence-jsonl path] <doctor|up|down|logs|status|run>
+        Usage: container-compose-adapter [--runtime noop-dry-run|linuxpod] [--dry-run] [-p name] [--sample public-smoke|backend-shaped] [--compose-file path] [--format text|json] [--evidence-jsonl path] <doctor|up|down|logs|status|run>
         """
     }
 }

@@ -53,7 +53,7 @@ final class DocumentationPositioningTests: XCTestCase {
         let notesIndex = try readText("docs/plans/notes/index.md")
         let note = try readText("docs/plans/notes/2026-06-12-stage-4-microbenchmark-closeout.md")
 
-        XCTAssertTrue(activeIndex.contains("Stage 5 Backend-shaped Product Smoke"))
+        XCTAssertTrue(activeIndex.contains("Stage 4 Microbenchmark Closeout"))
         XCTAssertFalse(activeIndex.contains("Stop before implementing or running a concrete Stage 4"))
         XCTAssertTrue(notesIndex.contains("2026-06-12-stage-4-microbenchmark-closeout.md"))
 
@@ -67,15 +67,20 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(note.contains("No signed runtime microbenchmark was run"))
     }
 
-    func testStage5DryRunEvidenceKeepsRuntimeSmokeAsNextTodo() throws {
+    func testStage5RuntimeSmokeClosesStage5AndGatesStage6Benchmarks() throws {
         let activeIndex = try readText("docs/plans/index.md")
         let notesIndex = try readText("docs/plans/notes/index.md")
         let note = try readText("docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md")
 
-        XCTAssertTrue(activeIndex.contains("Stage 5 runtime smoke: request explicit runtime approval"))
+        XCTAssertTrue(activeIndex.contains("Stage 5 is complete"))
+        XCTAssertTrue(activeIndex.contains("Stage 6 Cold/Warm Comparative Benchmark gate"))
         XCTAssertTrue(activeIndex.contains("20260612T093000Z-stage5-backend-smoke-dry-run.jsonl"))
+        XCTAssertTrue(activeIndex.contains("20260612T110105Z-stage5-backend-smoke-runtime-up.jsonl"))
+        XCTAssertTrue(activeIndex.contains("20260612T110105Z-stage5-backend-smoke-runtime-down-cleanup.jsonl"))
         XCTAssertTrue(notesIndex.contains("2026-06-12-stage-5-backend-smoke-evidence.md"))
+        XCTAssertTrue(notesIndex.contains("Stage 5 closed"))
 
+        XCTAssertTrue(note.contains("**Status:** `note-closed`"))
         XCTAssertTrue(note.contains("## Dry-run Evidence"))
         XCTAssertTrue(note.contains("Postgres"))
         XCTAssertTrue(note.contains("db-data"))
@@ -84,8 +89,12 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(note.contains("API service"))
         XCTAssertTrue(note.contains("logs/status/run"))
         XCTAssertTrue(note.contains("service DNS/managed hosts"))
-        XCTAssertTrue(note.contains("## Runtime Evidence Gap"))
-        XCTAssertTrue(note.contains("No signed Stage 5 runtime smoke was run"))
+        XCTAssertTrue(note.contains("## Runtime Smoke Evidence"))
+        XCTAssertTrue(note.contains("exactly\none signed backend-shaped fixture runtime smoke"))
+        XCTAssertTrue(note.contains("CREATE TABLE"))
+        XCTAssertTrue(note.contains("INSERT 0 1"))
+        XCTAssertTrue(note.contains("zero-leftover proof"))
+        XCTAssertTrue(note.contains("does not justify replacement or performance claims"))
     }
 
     private func readText(_ relativePath: String) throws -> String {

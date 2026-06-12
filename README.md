@@ -160,6 +160,12 @@ swift run container-compose-adapter \
 Use `--sample backend-shaped` to render the public DB -> migrate -> seed -> API
 fixture used by the LinuxPod one-pod Phase 4 gate.
 
+Use `--compose-file <path>` to derive the runtime plan from a Compose file
+through the Compose frontend and Apple-native planner instead of a built-in
+sample plan. This is the fixture-derived path required by the Stage 5
+backend-shaped smoke gate. `--compose-file` and `--sample` are mutually
+exclusive.
+
 The generated plan uses adapter-owned names prefixed with `cca-linuxpod-`,
 redacts likely secret environment values, and records JSONL evidence. Dry-run
 output is required before any LinuxPod runtime mutation.

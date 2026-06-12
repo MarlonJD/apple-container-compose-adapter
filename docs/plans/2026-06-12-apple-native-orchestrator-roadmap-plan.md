@@ -47,16 +47,20 @@ Already prepared:
 
 Most recent completed implementation task:
 
-- Stage 5 fixture-derived backend-shaped no-runtime dry-run evidence for
-  Postgres, `db-data`, migrate and seed jobs, API service, readiness,
-  logs/status/run, deterministic ports, managed hosts, and planned cleanup.
-  Runtime evidence remains approval-gated.
+- Stage 5 backend-shaped product smoke is complete. Fixture-derived dry-run
+  evidence passed, explicit runtime approval was granted, and one signed
+  backend-shaped fixture runtime smoke ran through the CLI `--compose-file`
+  fixture-derived path: db healthy, migrate/seed exited `0`, api ready,
+  `down --volumes` cleanup proven with zero adapter-owned leftovers. Evidence
+  note: `docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md`
+  (`note-closed`).
 
 Next roadmap task:
 
-- Stage 5 runtime smoke: request explicit current-task runtime approval for
-  one signed backend-shaped fixture smoke, then run it only if approval is
-  granted and retain cleanup proof.
+- Stage 6 cold/warm comparative benchmark gate: do not start cold/warm
+  LinuxPod-vs-Docker/OrbStack benchmark runs unless the user explicitly
+  re-approves runtime benchmark work. The Phase 6 `linuxpod-not-promising`
+  decision stands; Stage 5 proved functional shape only.
 
 ## Roadmap Summary
 
@@ -334,11 +338,11 @@ Use this prompt to continue from the roadmap:
 ```text
 You are working in MarlonJD/apple-container-compose-adapter at /Users/marlonjd/Developer/monorepos/emsi_monorepo/tools/apple-container-compose-adapter.
 
-Use docs/plans/2026-06-12-apple-native-orchestrator-roadmap-plan.md as the roadmap. Stage 1 through Stage 4 are complete or documented in the plan indexes. Stage 5 now has fixture-derived no-runtime dry-run evidence at docs/evidence/linuxpod-stage5-backend-smoke/20260612T093000Z-stage5-backend-smoke-dry-run.jsonl and the runtime evidence gap note at docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md.
+Use docs/plans/2026-06-12-apple-native-orchestrator-roadmap-plan.md as the roadmap. Stage 1 through Stage 5 are complete or documented in the plan indexes. Stage 5 closed with fixture-derived dry-run evidence plus one approved signed backend-shaped fixture runtime smoke and cleanup proof; see docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md and docs/evidence/linuxpod-stage5-backend-smoke/.
 
-Prepare the next gated Stage 5 step only: request explicit current-task approval before any runtime mutation. If approval is not provided, do not run runtime mutation and keep docs/plans/index.md pointing at the Stage 5 runtime-smoke approval gate. If approval is granted, run exactly one signed LinuxPod backend-shaped fixture runtime smoke using the fixture-derived path, capture runtime execution JSONL and cleanup proof, verify zero adapter-owned runtime/port/log/metrics leftovers except intended preserved cache state, and update docs/plans/index.md plus docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md with the actual result.
+The next stage is the Stage 6 cold/warm comparative benchmark, and it is gated: do not start cold/warm LinuxPod-vs-Docker/OrbStack benchmark runs, repeated warm runs, or any runtime mutation unless the user explicitly re-approves runtime benchmark work in the current task. The Phase 6 linuxpod-not-promising decision stands and Docker/OrbStack remain the recommended backend runtimes; Stage 5 proved functional product shape only. If approval is not provided, keep docs/plans/index.md pointing at the Stage 6 benchmark approval gate and do only no-runtime preparation that the user asked for.
 
-Keep Kubernetes parsing, persistent LinuxPod hotplug beyond the single smoke, rootfs-cache optimization, writable layers, Docker-compatible backends, registry login, host DNS mutation, repeated cold/warm product benchmarks, and replacement claims out of scope unless a new explicit task approves one of those surfaces.
+Keep Kubernetes parsing, persistent LinuxPod hotplug beyond single smokes, rootfs-cache optimization, writable layers, Docker-compatible backends, registry login, host DNS mutation, and replacement claims out of scope unless a new explicit task approves one of those surfaces.
 
-Verification required before any runtime request: swift test, git diff --check, and Stage 5 dry-run evidence validation. Verification required after an approved runtime smoke: focused Stage 5 tests, runtime JSONL validation, cleanup proof inspection, full swift test, git diff --check, and docs/plans/index.md updated to the actual final state. Do not create/switch branches. Commit and push child repo changes before any parent submodule pointer update, and do not update the parent unless explicitly asked.
+Verification required before any runtime request: swift test, git diff --check, and Stage 5 evidence validation. Verification required after any approved runtime work: JSONL validation, cleanup proof inspection with zero adapter-owned leftovers, full swift test, git diff --check, and docs/plans/index.md updated to the actual final state. Do not create/switch branches. Commit and push child repo changes before any parent submodule pointer update, and do not update the parent unless explicitly asked.
 ```
