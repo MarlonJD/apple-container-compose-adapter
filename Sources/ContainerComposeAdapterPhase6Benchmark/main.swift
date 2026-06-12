@@ -3,13 +3,14 @@
 
 import ContainerComposeAdapter
 import ContainerComposeAdapterLinuxPod
+import Containerization
 import Foundation
 
 @main
 struct Phase6BenchmarkHarness {
     static func main() async {
         do {
-            let options = try Options.parse(Array(CommandLine.arguments.dropFirst()))
+            let options = try Phase6BenchmarkOptions.parse(Array(CommandLine.arguments.dropFirst()))
             try await run(options)
         } catch {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
@@ -17,7 +18,7 @@ struct Phase6BenchmarkHarness {
         }
     }
 
-    private static func run(_ options: Options) async throws {
+    private static func run(_ options: Phase6BenchmarkOptions) async throws {
         guard options.approvalToken == LinuxPodBackend.runtimeApprovalToken else {
             throw HarnessError.usage(
                 "Phase 6 LinuxPod benchmark requires --approval-token \(LinuxPodBackend.runtimeApprovalToken)"
@@ -28,23 +29,27 @@ struct Phase6BenchmarkHarness {
         let backend = LinuxPodBackend(runtimeExecutor: executor)
         var records: [Phase6BenchmarkIterationRecord] = []
 
+        if let prepareSeedImageStore = options.prepareSeedImageStore {
+            let seedPlan = try makePlan(
+                options: options,
+                projectName: "\(options.projectPrefix)-\(options.runLabel)-seed"
+            )
+            FileHandle.standardError.write(
+                Data("phase6-benchmark: preparing seed image store at \(prepareSeedImageStore)\n".utf8)
+            )
+            try await Self.prepareSeedImageStore(path: prepareSeedImageStore, plan: seedPlan, options: options)
+        }
+
         for iteration in 1...options.iterations {
             let projectName = "\(options.projectPrefix)-\(options.runLabel)-\(String(format: "%03d", iteration))"
-            let plan = SamplePlans.publicBackendShaped(project: ProjectName(projectName))
+            let plan = try makePlan(options: options, projectName: projectName)
             let projectResource = backend.stateStore.projectName(for: plan.project)
             let projectDirectory = backend.stateStore.projectDirectory(for: plan.project)
-            let environment = benchmarkEnvironment(
-                options: options,
-                plan: plan,
-                backend: backend,
-                projectDirectory: projectDirectory
-            )
 
             FileHandle.standardError.write(Data("phase6-benchmark: \(options.runLabel) iteration \(iteration)/\(options.iterations) up\n".utf8))
             let record = await runIteration(
                 iteration: iteration,
-                runLabel: options.runLabel,
-                environment: environment,
+                options: options,
                 plan: plan,
                 projectResource: projectResource,
                 projectDirectory: projectDirectory,
@@ -67,10 +72,144 @@ struct Phase6BenchmarkHarness {
         print("phase6-benchmark: completed \(options.iterations) iteration(s); evidence at \(options.evidencePath ?? "")")
     }
 
+    // Image-store-seeded fresh-runtime iterations copy a prepared local image
+    // store into a fresh project runtime. Rootfs/initfs/volumes/pods remain cold.
+    private static func seedImageStoreIfRequested(
+        options: Phase6BenchmarkOptions,
+        plan: RuntimePlan,
+        backend: LinuxPodBackend
+    ) async throws -> SeedImageStoreCopyResult {
+        let runtimeDirectory = backend.stateStore.runtimeDirectory(for: plan.project)
+        let existedBeforeSeed = FileManager.default.fileExists(atPath: runtimeDirectory.path)
+        guard let seed = options.effectiveSeedImageStore else {
+            return SeedImageStoreCopyResult.notRequested(
+                projectRuntimeDirectoryExistedBeforeSeed: existedBeforeSeed
+            )
+        }
+        let seedURL = Phase6SeedImageStorePolicy.absoluteURL(for: seed)
+        try Phase6SeedImageStorePolicy.validateSeedSource(
+            seedURL,
+            allowExternal: options.allowExternalSeedImageStore
+        )
+        try FileManager.default.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+        let target = runtimeDirectory.appendingPathComponent("image-store", isDirectory: true)
+        try Phase6SeedImageStorePolicy.assertCleanupDoesNotTargetSeedSource(
+            cleanupTarget: runtimeDirectory,
+            seedSource: seedURL
+        )
+        if FileManager.default.fileExists(atPath: target.path) {
+            try FileManager.default.removeItem(at: target)
+        }
+        try FileManager.default.copyItem(at: seedURL, to: target)
+        let imageCacheStatus = await verifiedImageCacheStatus(imageStorePath: target, plan: plan)
+        return SeedImageStoreCopyResult(
+            requested: true,
+            copied: true,
+            validated: imageCacheStatus == .verifiedHit,
+            path: seed,
+            projectRuntimeDirectoryExistedBeforeSeed: existedBeforeSeed,
+            imageCacheStatus: imageCacheStatus
+        )
+    }
+
+    private static func prepareSeedImageStore(
+        path: String,
+        plan: RuntimePlan,
+        options: Phase6BenchmarkOptions
+    ) async throws {
+        let seedURL = Phase6SeedImageStorePolicy.absoluteURL(for: path)
+        try Phase6SeedImageStorePolicy.validateSeedPathOwnership(
+            seedURL,
+            allowExternal: options.allowExternalSeedImageStore
+        )
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: seedURL.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+            throw HarnessError.usage("--prepare-seed-image-store must point to a directory path")
+        }
+
+        try FileManager.default.createDirectory(at: seedURL, withIntermediateDirectories: true)
+        let imageStore = try ImageStore(path: seedURL)
+        if !(await imageStoreContainsLinuxArmReference(
+            imageStore,
+            reference: ContainerizationLinuxPodRuntimeExecutor.defaultInitImageReference
+        )) {
+            _ = try await imageStore.getInitImage(
+                reference: ContainerizationLinuxPodRuntimeExecutor.defaultInitImageReference
+            )
+        }
+
+        for image in Set(plan.services.map(\.image)).sorted() {
+            if await imageStoreContainsLinuxArmReference(imageStore, reference: image) {
+                FileHandle.standardError.write(
+                    Data("phase6-benchmark: validated existing linux/arm64 image \(image)\n".utf8)
+                )
+                continue
+            }
+            FileHandle.standardError.write(Data("phase6-benchmark: seeding linux/arm64 image \(image)\n".utf8))
+            _ = try await imageStore.pull(
+                reference: image,
+                platform: SystemPlatform.linuxArm.ociPlatform()
+            )
+        }
+        try Phase6SeedImageStorePolicy.writeSentinel(in: seedURL)
+    }
+
+    private static func imageStoreContainsLinuxArmReference(
+        _ imageStore: ImageStore,
+        reference: String
+    ) async -> Bool {
+        do {
+            let image = try await imageStore.get(reference: reference)
+            _ = try await image.manifest(for: SystemPlatform.linuxArm.ociPlatform())
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func verifiedImageCacheStatus(
+        imageStorePath: URL,
+        plan: RuntimePlan
+    ) async -> BenchmarkCacheStatus {
+        do {
+            let imageStore = try ImageStore(path: imageStorePath)
+            let references = Set(
+                plan.services.map(\.image)
+                    + [ContainerizationLinuxPodRuntimeExecutor.defaultInitImageReference]
+            )
+            var results: [Bool] = []
+            for reference in references {
+                results.append(await imageStoreContainsLinuxArmReference(imageStore, reference: reference))
+            }
+            guard !results.isEmpty else {
+                return .invalid
+            }
+            if results.allSatisfy({ $0 }) {
+                return .verifiedHit
+            }
+            return results.contains(true) ? .partialHit : .invalid
+        } catch {
+            return .invalid
+        }
+    }
+
+    private static func makePlan(options: Phase6BenchmarkOptions, projectName: String) throws -> RuntimePlan {
+        let plan: RuntimePlan
+        if let composeFile = options.composeFile {
+            let frontendResult = try ComposeFrontend().parseProject(
+                fileURL: URL(fileURLWithPath: composeFile),
+                projectName: projectName
+            )
+            plan = AppleNativePlanner().plan(frontendResult.project).runtimePlan
+        } else {
+            plan = SamplePlans.publicBackendShaped(project: ProjectName(projectName))
+        }
+        return DockerHubOfficialImageMirror.rewrite(plan: plan, mirror: options.dockerHubMirror)
+    }
+
     private static func runIteration(
         iteration: Int,
-        runLabel: String,
-        environment: BenchmarkRunMetadata,
+        options: Phase6BenchmarkOptions,
         plan: RuntimePlan,
         projectResource: String,
         projectDirectory: URL,
@@ -84,8 +223,28 @@ struct Phase6BenchmarkHarness {
         var cleanupDuration: Double?
         var guest: HostFootprintGuestStats?
         var actionCount = 0
+        var seedResult = SeedImageStoreCopyResult.notRequested(
+            projectRuntimeDirectoryExistedBeforeSeed: FileManager.default.fileExists(
+                atPath: backend.stateStore.runtimeDirectory(for: plan.project).path
+            )
+        )
+        var environment = benchmarkEnvironment(
+            options: options,
+            plan: plan,
+            backend: backend,
+            projectDirectory: projectDirectory,
+            seedResult: seedResult
+        )
 
         do {
+            seedResult = try await seedImageStoreIfRequested(options: options, plan: plan, backend: backend)
+            environment = benchmarkEnvironment(
+                options: options,
+                plan: plan,
+                backend: backend,
+                projectDirectory: projectDirectory,
+                seedResult: seedResult
+            )
             let upStarted = Date()
             let up = try await backend.execute(
                 command: .up,
@@ -131,7 +290,7 @@ struct Phase6BenchmarkHarness {
             return Phase6BenchmarkIterationRecord(
                 timestamp: iso8601Now(),
                 project: projectResource,
-                runLabel: runLabel,
+                runLabel: options.runLabel,
                 iteration: iteration,
                 environment: environment,
                 status: .measured,
@@ -161,7 +320,7 @@ struct Phase6BenchmarkHarness {
             return Phase6BenchmarkIterationRecord(
                 timestamp: iso8601Now(),
                 project: projectResource,
-                runLabel: runLabel,
+                runLabel: options.runLabel,
                 iteration: iteration,
                 environment: environment,
                 status: .failed,
@@ -178,76 +337,6 @@ struct Phase6BenchmarkHarness {
                 failure: "\(error)"
             )
         }
-    }
-}
-
-private struct Options {
-    var iterations = 1
-    var projectPrefix = "phase6-backend"
-    var runLabel = "phase6-smoke"
-    var lifecycle: BenchmarkLifecycle = .warm
-    var evidencePath: String?
-    var approvalToken: String?
-
-    static func parse(_ args: [String]) throws -> Options {
-        var options = Options()
-        var index = 0
-        while index < args.count {
-            let arg = args[index]
-            switch arg {
-            case "--iterations":
-                index += 1
-                guard index < args.count, let iterations = Int(args[index]), iterations > 0 else {
-                    throw HarnessError.usage("--iterations requires a positive integer")
-                }
-                options.iterations = iterations
-            case "--project-prefix":
-                index += 1
-                guard index < args.count, !args[index].isEmpty else {
-                    throw HarnessError.usage("--project-prefix requires a value")
-                }
-                options.projectPrefix = args[index]
-            case "--run-label":
-                index += 1
-                guard index < args.count, !args[index].isEmpty else {
-                    throw HarnessError.usage("--run-label requires a value")
-                }
-                options.runLabel = args[index]
-            case "--lifecycle":
-                index += 1
-                guard index < args.count, let lifecycle = BenchmarkLifecycle(rawValue: args[index]) else {
-                    throw HarnessError.usage("--lifecycle must be cold or warm")
-                }
-                options.lifecycle = lifecycle
-            case "--evidence-jsonl":
-                index += 1
-                guard index < args.count else {
-                    throw HarnessError.usage("--evidence-jsonl requires a path")
-                }
-                options.evidencePath = args[index]
-            case "--approval-token":
-                index += 1
-                guard index < args.count else {
-                    throw HarnessError.usage("--approval-token requires a value")
-                }
-                options.approvalToken = args[index]
-            case "--help", "-h":
-                throw HarnessError.usage(Self.usage())
-            default:
-                throw HarnessError.usage("unknown argument: \(arg)\n\n\(Self.usage())")
-            }
-            index += 1
-        }
-        guard options.evidencePath != nil else {
-            throw HarnessError.usage("--evidence-jsonl is required")
-        }
-        return options
-    }
-
-    static func usage() -> String {
-        """
-        Usage: container-compose-phase6-benchmark --evidence-jsonl path --approval-token token [--iterations n] [--project-prefix name] [--run-label label] [--lifecycle cold|warm]
-        """
     }
 }
 
@@ -294,11 +383,32 @@ private func elapsedSeconds(since start: Date) -> Double {
     Date().timeIntervalSince(start)
 }
 
+private struct SeedImageStoreCopyResult {
+    let requested: Bool
+    let copied: Bool
+    let validated: Bool
+    let path: String?
+    let projectRuntimeDirectoryExistedBeforeSeed: Bool
+    let imageCacheStatus: BenchmarkCacheStatus
+
+    static func notRequested(projectRuntimeDirectoryExistedBeforeSeed: Bool) -> SeedImageStoreCopyResult {
+        SeedImageStoreCopyResult(
+            requested: false,
+            copied: false,
+            validated: false,
+            path: nil,
+            projectRuntimeDirectoryExistedBeforeSeed: projectRuntimeDirectoryExistedBeforeSeed,
+            imageCacheStatus: .miss
+        )
+    }
+}
+
 private func benchmarkEnvironment(
-    options: Options,
+    options: Phase6BenchmarkOptions,
     plan: RuntimePlan,
     backend: LinuxPodBackend,
-    projectDirectory: URL
+    projectDirectory: URL,
+    seedResult: SeedImageStoreCopyResult
 ) -> BenchmarkRunMetadata {
     let imageStatuses = plan.services.map { service in
         cacheStatus(path: backend.stateStore.rootfsPath(project: plan.project, image: service.image).path)
@@ -308,20 +418,39 @@ private func benchmarkEnvironment(
         FileManager.default.fileExists(atPath: backend.stateStore.volumePath(project: plan.project, volume: volume).path)
     }
     let runtimeDirectory = backend.stateStore.runtimeDirectory(for: plan.project)
+    let projectRuntimeDirectoryExistedBeforeRun = FileManager.default.fileExists(atPath: runtimeDirectory.path)
     return BenchmarkRunMetadata(
         runtime: .linuxpod,
-        targetName: options.lifecycle == .warm ? "future LinuxPod warm" : "current LinuxPod cold",
+        targetName: options.effectiveLifecycleMode.targetName,
         runtimeVersion: "apple/containerization LinuxPod",
         containerizationVersion: ContainerizationLinuxPodRuntimeExecutor.containerizationVersion,
         appleContainerCLIVersion: nil,
         macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
         hostArchitecture: hostArchitecture(),
         lifecycle: options.lifecycle,
-        projectRuntimeExistedBeforeRun: FileManager.default.fileExists(atPath: runtimeDirectory.path),
-        imageCacheStatus: .unknown,
+        lifecycleMode: options.effectiveLifecycleMode,
+        seedImageStoreRequested: seedResult.requested,
+        seedImageStoreCopied: seedResult.copied,
+        seedImageStoreValidated: seedResult.validated,
+        seedImageStorePath: seedResult.path,
+        projectRuntimeExistedBeforeRun: projectRuntimeDirectoryExistedBeforeRun,
+        projectRuntimeDirectoryExistedBeforeSeed: seedResult.projectRuntimeDirectoryExistedBeforeSeed,
+        projectRuntimeDirectoryExistedBeforeRun: projectRuntimeDirectoryExistedBeforeRun,
+        podExistedBeforeRun: FileManager.default.fileExists(
+            atPath: runtimeDirectory.appendingPathComponent("boot.log").path
+        ),
+        imageCacheStatus: seedResult.imageCacheStatus,
         rootfsCacheStatus: rootfsStatus,
         initfsCacheStatus: cacheStatus(path: runtimeDirectory.appendingPathComponent("initfs.ext4").path),
-        volumeExistedBeforeRun: volumeStatuses.contains(true)
+        volumeExistedBeforeRun: volumeStatuses.contains(true),
+        hostPortPublished: nil,
+        hostPortTTFBSeconds: nil,
+        hostPortProbeStatus: "notMeasured",
+        hostPortPublishingNotImplemented: true,
+        loadWindowSeconds: nil,
+        loadWindowStatus: "notMeasured",
+        completedRequests: nil,
+        requestFailureCount: nil
     )
 }
 

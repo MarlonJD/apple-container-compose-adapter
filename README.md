@@ -251,8 +251,9 @@ scripts/sign-debug-runtime.sh .build/arm64-apple-macosx/debug/container-compose-
 .build/arm64-apple-macosx/debug/container-compose-phase6-benchmark \
   --iterations 5 \
   --project-prefix phase6-backend \
-  --run-label phase6-warm \
-  --evidence-jsonl docs/evidence/linuxpod-phase6-benchmark/phase6-warm.jsonl \
+  --run-label phase6-cold \
+  --lifecycle cold \
+  --evidence-jsonl docs/evidence/linuxpod-phase6-benchmark/phase6-cold.jsonl \
   --approval-token I_APPROVE_CCA_LINUXPOD_RUNTIME_MUTATION
 ```
 
@@ -260,6 +261,60 @@ The harness records JSONL iteration and summary rows with guest cgroup memory,
 CPU use, block I/O, timing, failure count, cleanup state, and host physical
 memory status. Host physical memory remains `blocked` until a reliable
 host-side attribution source exists.
+
+Stage 6 additions: `--compose-file <path>` runs the fixture-derived
+ComposeFrontend plan instead of the built-in sample. `--lifecycle` accepts:
+
+- `cold`: no pre-seeded image store and fresh rootfs/initfs/volume/pod state.
+- `image-store-seeded-fresh-runtime`: copy a prepared image store into each
+  fresh project runtime before `up`; rootfs/initfs/volume/pod state is still
+  cold.
+- `persistent-warm-project-runtime`: reserved for a future experiment where the
+  project LinuxPod, rootfs/initfs cache, named volume, and service lifecycle are
+  actually reused.
+
+`--seed-image-store <path>` copies a pre-pulled image store into each
+iteration's fresh project runtime so the benchmark can isolate image-store
+availability from registry pulls. `--prepare-seed-image-store` prepares that
+seed store before measured iterations by pulling the LinuxPod init image plus
+the plan's `linux/arm64` service images once; if `--seed-image-store` is
+omitted, the prepared seed path is used for the measured iterations. Seed
+stores are local benchmark cache state, not evidence artifacts. By default they
+must live under
+`.container-compose-adapter/benchmark-seed-image-stores/` and contain the
+`.container-compose-adapter-seed-image-store` sentinel; pass
+`--allow-external-seed-image-store` only for explicitly reviewed external
+paths.
+`--docker-hub-mirror <host-or-prefix>` rewrites Docker Hub official image
+references such as `postgres:16-alpine`, `docker.io/postgres:16-alpine`, and
+`docker.io/library/postgres:16-alpine` to the mirror prefix, for example
+`mirror.gcr.io/library/postgres:16-alpine`, without changing non-Docker Hub or
+namespaced Docker Hub image references.
+
+For Stage 6 rate-limit mitigation, use the verified public mirror and prepare
+the image-store seed outside the measured iterations:
+
+```bash
+.build/arm64-apple-macosx/debug/container-compose-phase6-benchmark \
+  --iterations 5 \
+  --project-prefix stage6-backend \
+  --run-label stage6-seeded-image-store \
+  --lifecycle image-store-seeded-fresh-runtime \
+  --compose-file docs/evidence/fixtures/backend-shaped/compose.yaml \
+  --docker-hub-mirror mirror.gcr.io \
+  --prepare-seed-image-store .container-compose-adapter/benchmark-seed-image-stores/stage6-arm64 \
+  --evidence-jsonl docs/evidence/linuxpod-stage6-benchmark/stage6-seeded-image-store.jsonl \
+  --approval-token I_APPROVE_CCA_LINUXPOD_RUNTIME_MUTATION
+```
+
+Seeding is a benchmark harness step, not a product persistent-cache feature.
+Repeated cold runs pull on every iteration because adapter state is
+per-project, so public registry throttling can still affect cold batches; the
+evidence records such failures as registry throttling, not runtime failures.
+The current Stage 6 harness marks localhost host-port reachability and
+completed requests per load window as `notMeasured`; it proves guest-side
+readiness/jobs/cleanup only until host port publishing is implemented and
+probed from macOS.
 
 ## Kubernetes Input Subset
 

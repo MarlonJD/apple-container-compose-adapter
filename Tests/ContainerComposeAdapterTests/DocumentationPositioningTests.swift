@@ -69,13 +69,13 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(note.contains("No signed runtime microbenchmark was run"))
     }
 
-    func testStage5RuntimeSmokeClosesStage5AndGatesStage6Benchmarks() throws {
+    func testStage5RuntimeSmokeStaysRecordedAfterStage6Closure() throws {
         let activeIndex = try readText("docs/plans/index.md")
         let notesIndex = try readText("docs/plans/notes/index.md")
         let note = try readText("docs/plans/notes/2026-06-12-stage-5-backend-smoke-evidence.md")
 
         XCTAssertTrue(activeIndex.contains("Stage 5 is complete"))
-        XCTAssertTrue(activeIndex.contains("Stage 6 Cold/Warm Comparative Benchmark gate"))
+        XCTAssertTrue(activeIndex.contains("Stage 6 cold/image-store-seeded evidence is closed"))
         XCTAssertTrue(activeIndex.contains("20260612T093000Z-stage5-backend-smoke-dry-run.jsonl"))
         XCTAssertTrue(activeIndex.contains("20260612T110105Z-stage5-backend-smoke-runtime-up.jsonl"))
         XCTAssertTrue(activeIndex.contains("20260612T110105Z-stage5-backend-smoke-runtime-down-cleanup.jsonl"))
@@ -97,6 +97,31 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertTrue(note.contains("INSERT 0 1"))
         XCTAssertTrue(note.contains("zero-leftover proof"))
         XCTAssertTrue(note.contains("does not justify replacement or performance claims"))
+    }
+
+    func testStage6ColdWarmBenchmarkDecisionClosesWarmGate() throws {
+        let activeIndex = try readText("docs/plans/index.md")
+        let notesIndex = try readText("docs/plans/notes/index.md")
+        let note = try readText("docs/plans/notes/2026-06-12-stage-6-cold-warm-benchmark-decision.md")
+
+        XCTAssertTrue(activeIndex.contains("Stage 8A instrumentation/classification is complete"))
+        XCTAssertTrue(activeIndex.contains("persistent project LinuxPod + rootfs/initfs/volume cache + service hotplug/reuse"))
+        XCTAssertTrue(notesIndex.contains("note-closed | [Stage 6 Cold/Warm Comparative Benchmark Decision]"))
+        XCTAssertTrue(notesIndex.contains("image-store-seeded fresh runtime `5/5` run"))
+
+        XCTAssertTrue(note.contains("**Status:** `note-closed`"))
+        XCTAssertTrue(note.contains("**Decision:** `stage6-image-store-only-warming-insufficient`"))
+        XCTAssertTrue(note.contains("20260612T125100Z-stage6-warm-5-escalated-readiness.jsonl"))
+        XCTAssertTrue(note.contains("measuredIterations=5"))
+        XCTAssertTrue(note.contains("failureCount=0"))
+        XCTAssertTrue(note.contains("image-store-seeded fresh runtime"))
+        XCTAssertTrue(note.contains("image-store-only warming did not make LinuxPod Compose-level competitive"))
+        XCTAssertTrue(note.contains("`linux/arm64`"))
+        XCTAssertTrue(note.contains("Stage 6 solved Docker Hub rate-limit exposure for measurement"))
+        XCTAssertTrue(note.contains("persistent project LinuxPod + rootfs/initfs/volume cache + service hotplug/reuse"))
+        XCTAssertFalse(note.contains("persistent warm LinuxPod failed"))
+        XCTAssertFalse(note.contains("before any runtime mutation"))
+        XCTAssertFalse(note.contains("host RAM savings"))
     }
 
     private func readText(_ relativePath: String) throws -> String {

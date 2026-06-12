@@ -10,6 +10,7 @@ import SystemPackage
 
 public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
     public static let containerizationVersion = "0.26.5"
+    public static let defaultInitImageReference = "ghcr.io/apple/containerization/vminit:0.26.5"
 
     private let initImageReference: String
     private let podCPUs: Int
@@ -20,7 +21,7 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
     private var states: [String: ProjectRuntime] = [:]
 
     public init(
-        initImageReference: String = "ghcr.io/apple/containerization/vminit:0.26.5",
+        initImageReference: String = ContainerizationLinuxPodRuntimeExecutor.defaultInitImageReference,
         podCPUs: Int = 4,
         podMemoryBytes: UInt64 = 1024 * 1024 * 1024,
         defaultRootfsSizeBytes: UInt64 = 2 * 1024 * 1024 * 1024,
@@ -112,13 +113,17 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
             )
         }
         let stats = try await state.pod.statistics(categories: .all)
+        let cgroupLimit = HostFootprintMetricAccumulator.sumCgroupMemoryLimit(
+            stats.compactMap { $0.memory?.limitBytes }
+        )
         return HostFootprintGuestStats(
-            cgroupMemoryCurrentBytes: sumUInt64(stats.compactMap { $0.memory?.usageBytes }),
-            cgroupMemoryLimitBytes: sumUInt64(stats.compactMap { $0.memory?.limitBytes }),
-            processCount: sumUInt64(stats.compactMap { $0.process?.current }),
-            cpuUsageUsec: sumUInt64(stats.compactMap { $0.cpu?.usageUsec }),
-            blockReadBytes: sumUInt64(stats.flatMap { $0.blockIO?.devices ?? [] }.map(\.readBytes)),
-            blockWriteBytes: sumUInt64(stats.flatMap { $0.blockIO?.devices ?? [] }.map(\.writeBytes))
+            cgroupMemoryCurrentBytes: HostFootprintMetricAccumulator.sumSaturating(stats.compactMap { $0.memory?.usageBytes }),
+            cgroupMemoryLimitBytes: cgroupLimit.bytes,
+            cgroupMemoryLimitUnlimited: cgroupLimit.unlimited,
+            processCount: HostFootprintMetricAccumulator.sumSaturating(stats.compactMap { $0.process?.current }),
+            cpuUsageUsec: HostFootprintMetricAccumulator.sumSaturating(stats.compactMap { $0.cpu?.usageUsec }),
+            blockReadBytes: HostFootprintMetricAccumulator.sumSaturating(stats.flatMap { $0.blockIO?.devices ?? [] }.map(\.readBytes)),
+            blockWriteBytes: HostFootprintMetricAccumulator.sumSaturating(stats.flatMap { $0.blockIO?.devices ?? [] }.map(\.writeBytes))
         )
     }
 
@@ -145,12 +150,6 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         let status = try await process.wait(timeoutInSeconds: 600)
         try await process.delete()
         return status.exitCode
-    }
-
-    private func sumUInt64(_ values: [UInt64]) -> UInt64 {
-        values.reduce(0) { partial, value in
-            partial &+ value
-        }
     }
 
     private func createProjectRuntime(_ event: LinuxPodRuntimeEvent) async throws {

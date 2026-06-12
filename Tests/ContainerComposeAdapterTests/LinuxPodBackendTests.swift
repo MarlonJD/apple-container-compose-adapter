@@ -166,6 +166,8 @@ final class LinuxPodBackendTests: XCTestCase {
         let dbReady = try XCTUnwrap(result.actions.first { $0.kind == .waitForReadiness && $0.resourceName == "db" })
         XCTAssertEqual(dbReady.metadata["condition"], "service_healthy")
         XCTAssertEqual(dbReady.metadata["command"], "pg_isready -U app -d app")
+        XCTAssertEqual(dbReady.metadata["readinessWaitBudgetSeconds"], dbReady.metadata["timeoutSeconds"])
+        XCTAssertTrue(dbReady.description.contains("readiness wait budget"))
     }
 
     func testBackendShapedLogsStatusAndRunDryRunsExposePhase4Subset() throws {

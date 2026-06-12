@@ -296,7 +296,7 @@ public struct LinuxPodBackend: RuntimeBackend {
                 builder.append(
                     kind: .waitForReadiness,
                     resourceName: service.name,
-                    description: "Wait for \(readiness.kind.rawValue) with timeout \(readiness.timeoutSeconds)s.",
+                    description: "Wait for \(readiness.kind.rawValue) with readiness wait budget \(readiness.timeoutSeconds)s.",
                     mutatesRuntime: false,
                     metadata: readinessMetadata(readiness)
                 )
@@ -390,7 +390,7 @@ public struct LinuxPodBackend: RuntimeBackend {
                 builder.append(
                     kind: .waitForReadiness,
                     resourceName: service.name,
-                    description: "Wait for \(readiness.kind.rawValue) with timeout \(readiness.timeoutSeconds)s.",
+                    description: "Wait for \(readiness.kind.rawValue) with readiness wait budget \(readiness.timeoutSeconds)s.",
                     mutatesRuntime: false,
                     metadata: readinessMetadata(readiness)
                 )
@@ -467,7 +467,8 @@ public struct LinuxPodBackend: RuntimeBackend {
     private func readinessMetadata(_ readiness: ReadinessProbe) -> [String: String] {
         var metadata = [
             "condition": readiness.kind.rawValue,
-            "timeoutSeconds": "\(readiness.timeoutSeconds)"
+            "timeoutSeconds": "\(readiness.timeoutSeconds)",
+            "readinessWaitBudgetSeconds": "\(readiness.timeoutSeconds)"
         ]
         if !readiness.command.isEmpty {
             metadata["command"] = readiness.command.joined(separator: " ")

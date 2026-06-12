@@ -351,10 +351,14 @@ private extension LocalDevPort {
 
 private extension LocalDevHealthcheck {
     func runtimeReadinessProbe() -> ReadinessProbe {
-        ReadinessProbe(
+        let attemptCount = max(retries, 1)
+        let readinessBudget = startPeriodSeconds
+            + (intervalSeconds * Double(attemptCount))
+            + timeoutSeconds
+        return ReadinessProbe(
             kind: .serviceHealthy,
             command: test,
-            timeoutSeconds: Int(timeoutSeconds.rounded(.up))
+            timeoutSeconds: max(1, Int(readinessBudget.rounded(.up)))
         )
     }
 }

@@ -12,26 +12,60 @@ public enum HostFootprintSchema {
 
 public struct HostFootprintGuestStats: Codable, Equatable, Sendable {
     public let cgroupMemoryCurrentBytes: UInt64
-    public let cgroupMemoryLimitBytes: UInt64
+    public let cgroupMemoryLimitBytes: UInt64?
+    public let cgroupMemoryLimitUnlimited: Bool
     public let processCount: UInt64
     public let cpuUsageUsec: UInt64
     public let blockReadBytes: UInt64
     public let blockWriteBytes: UInt64
+    public let processRSSBytes: UInt64?
 
     public init(
         cgroupMemoryCurrentBytes: UInt64,
-        cgroupMemoryLimitBytes: UInt64,
+        cgroupMemoryLimitBytes: UInt64?,
+        cgroupMemoryLimitUnlimited: Bool = false,
         processCount: UInt64,
         cpuUsageUsec: UInt64,
         blockReadBytes: UInt64,
-        blockWriteBytes: UInt64
+        blockWriteBytes: UInt64,
+        processRSSBytes: UInt64? = nil
     ) {
         self.cgroupMemoryCurrentBytes = cgroupMemoryCurrentBytes
         self.cgroupMemoryLimitBytes = cgroupMemoryLimitBytes
+        self.cgroupMemoryLimitUnlimited = cgroupMemoryLimitUnlimited
         self.processCount = processCount
         self.cpuUsageUsec = cpuUsageUsec
         self.blockReadBytes = blockReadBytes
         self.blockWriteBytes = blockWriteBytes
+        self.processRSSBytes = processRSSBytes
+    }
+}
+
+public struct HostFootprintCgroupMemoryLimit: Equatable, Sendable {
+    public let bytes: UInt64?
+    public let unlimited: Bool
+
+    public init(bytes: UInt64?, unlimited: Bool) {
+        self.bytes = bytes
+        self.unlimited = unlimited
+    }
+}
+
+public enum HostFootprintMetricAccumulator {
+    public static let cgroupUnlimitedThreshold = UInt64.max / 2
+
+    public static func sumSaturating(_ values: [UInt64]) -> UInt64 {
+        values.reduce(0) { partial, value in
+            let (sum, overflow) = partial.addingReportingOverflow(value)
+            return overflow ? UInt64.max : sum
+        }
+    }
+
+    public static func sumCgroupMemoryLimit(_ values: [UInt64]) -> HostFootprintCgroupMemoryLimit {
+        guard !values.contains(where: { $0 >= cgroupUnlimitedThreshold }) else {
+            return HostFootprintCgroupMemoryLimit(bytes: nil, unlimited: true)
+        }
+        return HostFootprintCgroupMemoryLimit(bytes: sumSaturating(values), unlimited: false)
     }
 }
 

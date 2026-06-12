@@ -72,6 +72,101 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(project.adapterOwnedName(prefix: "cca-linuxpod-"), "cca-linuxpod-my-api-stack")
     }
 
+    func testDockerHubOfficialImageMirrorRewritesOfficialImageReferences() {
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "docker.io/library/postgres:16-alpine",
+                mirror: "mirror.gcr.io/"
+            ),
+            "mirror.gcr.io/library/postgres:16-alpine"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "registry-1.docker.io/library/python@sha256:abc123",
+                mirror: "mirror.gcr.io"
+            ),
+            "mirror.gcr.io/library/python@sha256:abc123"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "postgres:16-alpine",
+                mirror: "mirror.gcr.io"
+            ),
+            "mirror.gcr.io/library/postgres:16-alpine"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "ghcr.io/apple/containerization/vminit:0.26.5",
+                mirror: "mirror.gcr.io"
+            ),
+            "ghcr.io/apple/containerization/vminit:0.26.5"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "docker.io/postgres:16-alpine",
+                mirror: "mirror.gcr.io/"
+            ),
+            "mirror.gcr.io/library/postgres:16-alpine"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "registry-1.docker.io/postgres:16-alpine",
+                mirror: "mirror.gcr.io"
+            ),
+            "mirror.gcr.io/library/postgres:16-alpine"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "index.docker.io/postgres@sha256:abc123",
+                mirror: "mirror.gcr.io/"
+            ),
+            "mirror.gcr.io/library/postgres@sha256:abc123"
+        )
+        XCTAssertEqual(
+            DockerHubOfficialImageMirror.rewrite(
+                image: "docker.io/myorg/postgres:16-alpine",
+                mirror: "mirror.gcr.io"
+            ),
+            "docker.io/myorg/postgres:16-alpine"
+        )
+    }
+
+    func testDockerHubOfficialImageMirrorRejectsInvalidMirrorSchemes() {
+        XCTAssertEqual(
+            try DockerHubOfficialImageMirror.validatedMirror("mirror.gcr.io/"),
+            "mirror.gcr.io"
+        )
+        XCTAssertThrowsError(
+            try DockerHubOfficialImageMirror.validatedMirror("https://mirror.gcr.io")
+        ) { error in
+            XCTAssertTrue("\(error)".contains("without a URL scheme"))
+        }
+    }
+
+    func testDockerHubOfficialImageMirrorRewritesRuntimePlanServicesOnly() {
+        let plan = RuntimePlan(
+            project: ProjectName("Mirror Test"),
+            services: [
+                ServicePlan(name: "db", image: "docker.io/library/postgres:16-alpine"),
+                ServicePlan(name: "init", image: "ghcr.io/apple/containerization/vminit:0.26.5")
+            ],
+            volumes: [VolumePlan(name: "db-data")],
+            diagnostics: [
+                Diagnostic(severity: .warning, code: "kept", message: "kept")
+            ]
+        )
+
+        let mirrored = DockerHubOfficialImageMirror.rewrite(plan: plan, mirror: "mirror.gcr.io")
+
+        XCTAssertEqual(mirrored.project, plan.project)
+        XCTAssertEqual(mirrored.services.map(\.image), [
+            "mirror.gcr.io/library/postgres:16-alpine",
+            "ghcr.io/apple/containerization/vminit:0.26.5"
+        ])
+        XCTAssertEqual(mirrored.volumes, plan.volumes)
+        XCTAssertEqual(mirrored.diagnostics, plan.diagnostics)
+    }
+
     func testAppleNativePlannerPreservesCurrentRuntimePlanShape() throws {
         let project = LocalDevProject(
             id: "demo-stack",
@@ -173,6 +268,32 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(result.runtimePlan.hasBlockingDiagnostics)
     }
 
+    func testAppleNativePlannerUsesHealthcheckRetryBudgetForReadinessTimeout() {
+        let project = LocalDevProject(
+            id: "health-budget",
+            name: "Health Budget",
+            services: [
+                LocalDevService(
+                    name: "db",
+                    image: "docker.io/library/postgres:16-alpine",
+                    healthcheck: LocalDevHealthcheck(
+                        test: ["pg_isready"],
+                        intervalSeconds: 2,
+                        timeoutSeconds: 2,
+                        retries: 30,
+                        startPeriodSeconds: 5
+                    )
+                )
+            ]
+        )
+
+        let plan = AppleNativePlanner().plan(project).runtimePlan
+        let readiness = plan.services.first?.readiness.first
+
+        XCTAssertEqual(readiness?.kind, .serviceHealthy)
+        XCTAssertEqual(readiness?.timeoutSeconds, 67)
+    }
+
     func testLocalDevProjectNormalizesServicesJobsAndNamedVolumesToRuntimePlan() throws {
         let project = LocalDevProject(
             id: "demo-stack",
@@ -262,7 +383,7 @@ final class RuntimeContractTests: XCTestCase {
                 ReadinessProbe(
                     kind: .serviceHealthy,
                     command: ["python", "-c", "print('ready')"],
-                    timeoutSeconds: 7
+                    timeoutSeconds: 24
                 )
             ]
         )
@@ -576,22 +697,29 @@ final class RuntimeContractTests: XCTestCase {
         let measured = Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T04:00:00Z",
             project: "cca-linuxpod-phase6-backend-001",
-            runLabel: "phase6-warm",
+            runLabel: "phase6-seeded-image-store",
             iteration: 1,
             environment: BenchmarkRunMetadata(
                 runtime: .linuxpod,
-                targetName: "future LinuxPod warm",
+                targetName: "LinuxPod image-store-seeded fresh runtime",
                 runtimeVersion: "apple/containerization LinuxPod",
                 containerizationVersion: "0.26.5",
                 appleContainerCLIVersion: "1.0.0",
                 macOSVersion: "15.5",
                 hostArchitecture: "arm64",
-                lifecycle: .warm,
-                projectRuntimeExistedBeforeRun: true,
-                imageCacheStatus: .hit,
-                rootfsCacheStatus: .hit,
-                initfsCacheStatus: .hit,
-                volumeExistedBeforeRun: true
+                lifecycle: .imageStoreSeededFreshRuntime,
+                seedImageStoreRequested: true,
+                seedImageStoreCopied: true,
+                seedImageStoreValidated: true,
+                seedImageStorePath: ".container-compose-adapter/benchmark-seed-image-stores/stage6-arm64",
+                projectRuntimeDirectoryExistedBeforeSeed: false,
+                projectRuntimeDirectoryExistedBeforeRun: true,
+                podExistedBeforeRun: false,
+                imageCacheStatus: .verifiedHit,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .miss,
+                volumeExistedBeforeRun: false,
+                hostPortPublishingNotImplemented: true
             ),
             status: .measured,
             durationsSeconds: Phase6BenchmarkDurations(
@@ -616,7 +744,7 @@ final class RuntimeContractTests: XCTestCase {
         let failed = Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T04:01:00Z",
             project: "cca-linuxpod-phase6-backend-002",
-            runLabel: "phase6-warm",
+            runLabel: "phase6-seeded-image-store",
             iteration: 2,
             status: .failed,
             durationsSeconds: Phase6BenchmarkDurations(up: 2.0, status: nil, logs: nil, cleanup: 0.5),
@@ -630,7 +758,7 @@ final class RuntimeContractTests: XCTestCase {
         let summary = Phase6BenchmarkSummaryRecord(
             timestamp: "2026-06-12T04:02:00Z",
             projectPrefix: "phase6-backend",
-            runLabel: "phase6-warm",
+            runLabel: "phase6-seeded-image-store",
             requestedIterations: 2,
             records: [measured, failed]
         )
@@ -638,10 +766,16 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(measured.schemaVersion, Phase6BenchmarkSchema.version)
         XCTAssertEqual(measured.recordType, Phase6BenchmarkSchema.iterationRecordType)
         XCTAssertEqual(measured.hostPhysicalMemoryStatus, .blocked)
-        XCTAssertEqual(measured.environment?.targetName, "future LinuxPod warm")
-        XCTAssertEqual(measured.environment?.coldOrWarm, "warm")
-        XCTAssertEqual(measured.environment?.lifecycle, .warm)
-        XCTAssertEqual(measured.environment?.rootfsCacheStatus, .hit)
+        XCTAssertEqual(measured.environment?.targetName, "LinuxPod image-store-seeded fresh runtime")
+        XCTAssertEqual(measured.environment?.coldOrWarm, "image-store-seeded-fresh-runtime")
+        XCTAssertEqual(measured.environment?.lifecycleMode, "image-store-seeded-fresh-runtime")
+        XCTAssertEqual(measured.environment?.lifecycle, .imageStoreSeededFreshRuntime)
+        XCTAssertEqual(measured.environment?.projectRuntimeDirectoryExistedBeforeSeed, false)
+        XCTAssertEqual(measured.environment?.projectRuntimeDirectoryExistedBeforeRun, true)
+        XCTAssertEqual(measured.environment?.podExistedBeforeRun, false)
+        XCTAssertEqual(measured.environment?.imageCacheStatus, .verifiedHit)
+        XCTAssertEqual(measured.environment?.rootfsCacheStatus, .miss)
+        XCTAssertEqual(measured.environment?.hostPortPublishingNotImplemented, true)
         XCTAssertEqual(summary.recordType, Phase6BenchmarkSchema.summaryRecordType)
         XCTAssertEqual(summary.environment, measured.environment)
         XCTAssertEqual(summary.measuredIterations, 1)
@@ -650,6 +784,313 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(summary.guestCgroupMemoryCurrentP50Bytes, 128 * 1024 * 1024)
         XCTAssertEqual(summary.blockReadP50Bytes, 9 * 1024 * 1024)
         XCTAssertEqual(summary.upDurationP50Seconds, 12.25)
+        XCTAssertEqual(summary.lifecycleMode, "image-store-seeded-fresh-runtime")
+        XCTAssertEqual(summary.statusTimingMeaning, "control-plane-local-state")
+        XCTAssertEqual(summary.logsTimingMeaning, "control-plane-no-op")
+        XCTAssertEqual(summary.hostPortProbeStatus, "notMeasured")
+    }
+
+    func testPhase6BenchmarkOptionsParseSeedSafetyAndLifecycleNaming() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "stage6.jsonl",
+            "--approval-token", "token",
+            "--lifecycle", "image-store-seeded-fresh-runtime",
+            "--seed-image-store", ".container-compose-adapter/benchmark-seed-image-stores/stage6-arm64",
+            "--docker-hub-mirror", "mirror.gcr.io/"
+        ])
+
+        XCTAssertEqual(options.lifecycle, .imageStoreSeededFreshRuntime)
+        XCTAssertEqual(options.seedImageStore, ".container-compose-adapter/benchmark-seed-image-stores/stage6-arm64")
+        XCTAssertEqual(options.dockerHubMirror, "mirror.gcr.io")
+        XCTAssertFalse(options.allowExternalSeedImageStore)
+
+        XCTAssertThrowsError(
+            try Phase6BenchmarkOptions.parse([
+                "--evidence-jsonl", "stage6.jsonl",
+                "--approval-token", "token",
+                "--seed-image-store", "/tmp/external-seed"
+            ])
+        ) { error in
+            XCTAssertTrue("\(error)".contains("outside adapter-owned benchmark seed cache"))
+        }
+
+        let external = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "stage6.jsonl",
+            "--approval-token", "token",
+            "--seed-image-store", "/tmp/external-seed",
+            "--allow-external-seed-image-store"
+        ])
+        XCTAssertTrue(external.allowExternalSeedImageStore)
+    }
+
+    func testStage8LifecycleModesClassifyAThroughG() {
+        let cases: [(BenchmarkLifecycleMode, BenchmarkRunMetadata)] = [
+            (
+                .coldRuntime,
+                benchmarkMetadata(
+                    lifecycle: .cold,
+                    imageCacheStatus: .miss,
+                    rootfsCacheStatus: .miss,
+                    initfsCacheStatus: .miss
+                )
+            ),
+            (
+                .imageStoreSeededFreshRuntime,
+                benchmarkMetadata(
+                    lifecycle: .imageStoreSeededFreshRuntime,
+                    seedImageStoreCopied: true,
+                    imageCacheStatus: .verifiedHit,
+                    rootfsCacheStatus: .miss,
+                    initfsCacheStatus: .miss
+                )
+            ),
+            (
+                .rootfsCacheHitRuntime,
+                benchmarkMetadata(
+                    lifecycle: .persistentWarmProjectRuntime,
+                    imageCacheStatus: .hit,
+                    rootfsCacheStatus: .hit,
+                    initfsCacheStatus: .miss
+                )
+            ),
+            (
+                .initfsCacheHitRuntime,
+                benchmarkMetadata(
+                    lifecycle: .persistentWarmProjectRuntime,
+                    imageCacheStatus: .hit,
+                    rootfsCacheStatus: .miss,
+                    initfsCacheStatus: .hit
+                )
+            ),
+            (
+                .warmPreservedVolume,
+                benchmarkMetadata(
+                    lifecycle: .persistentWarmProjectRuntime,
+                    imageCacheStatus: .hit,
+                    rootfsCacheStatus: .miss,
+                    initfsCacheStatus: .miss,
+                    volumeExistedBeforeRun: true
+                )
+            ),
+            (
+                .persistentPodHotplug,
+                benchmarkMetadata(
+                    lifecycle: .persistentWarmProjectRuntime,
+                    imageCacheStatus: .hit,
+                    rootfsCacheStatus: .hit,
+                    initfsCacheStatus: .miss,
+                    podExistedBeforeRun: true
+                )
+            ),
+            (
+                .allWarmProjectRuntime,
+                benchmarkMetadata(
+                    lifecycle: .persistentWarmProjectRuntime,
+                    imageCacheStatus: .hit,
+                    rootfsCacheStatus: .hit,
+                    initfsCacheStatus: .hit,
+                    volumeExistedBeforeRun: true,
+                    podExistedBeforeRun: true
+                )
+            )
+        ]
+
+        for (expectedMode, metadata) in cases {
+            XCTAssertEqual(metadata.lifecycleModeID, expectedMode.id)
+            XCTAssertEqual(metadata.lifecycleMode, expectedMode.rawValue)
+        }
+    }
+
+    func testStage8BenchmarkOptionsParseExplicitLifecycleMode() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "stage8.jsonl",
+            "--approval-token", "token",
+            "--lifecycle-mode", "rootfs-cache-hit-runtime"
+        ])
+
+        XCTAssertEqual(options.lifecycleMode, .rootfsCacheHitRuntime)
+        XCTAssertEqual(options.lifecycle, .persistentWarmProjectRuntime)
+        XCTAssertEqual(options.effectiveLifecycleMode, .rootfsCacheHitRuntime)
+    }
+
+    func testStage8BenchmarkEvidenceValidatorRequiresClassifiedMetricsAndNotMeasuredGaps() {
+        let valid = Phase6BenchmarkIterationRecord(
+            timestamp: "2026-06-12T13:00:00Z",
+            project: "cca-linuxpod-stage8-rootfs-001",
+            runLabel: "stage8-rootfs",
+            iteration: 1,
+            environment: benchmarkMetadata(
+                lifecycle: .persistentWarmProjectRuntime,
+                lifecycleMode: .rootfsCacheHitRuntime,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .hit,
+                initfsCacheStatus: .miss,
+                hostPortProbeStatus: "notMeasured",
+                loadWindowStatus: "notMeasured"
+            ),
+            status: .measured,
+            durationsSeconds: Phase6BenchmarkDurations(
+                up: 11.0,
+                status: 0.02,
+                logs: 0.01,
+                cleanup: 0.4,
+                rootfsPrep: 0.05,
+                initfsPrep: 1.2,
+                volumeCreateOrReuse: 0.01,
+                podCreateOrReuse: 4.0,
+                containerStart: 2.1,
+                healthcheck: 3.3
+            ),
+            guest: HostFootprintGuestStats(
+                cgroupMemoryCurrentBytes: 128 * 1024 * 1024,
+                cgroupMemoryLimitBytes: nil,
+                cgroupMemoryLimitUnlimited: true,
+                processCount: 7,
+                cpuUsageUsec: 500,
+                blockReadBytes: 2048,
+                blockWriteBytes: 4096,
+                processRSSBytes: 64 * 1024 * 1024
+            ),
+            hostPhysicalMemoryStatus: .blocked,
+            actionCount: 16,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            healthcheckAttempts: 4,
+            dataFootprintBytes: 32 * 1024 * 1024,
+            failure: nil
+        )
+
+        XCTAssertEqual(Stage8BenchmarkEvidenceValidator().validate(records: [valid]), [])
+
+        let invalid = Phase6BenchmarkIterationRecord(
+            timestamp: "2026-06-12T13:01:00Z",
+            project: "cca-linuxpod-stage8-rootfs-002",
+            runLabel: "stage8-rootfs",
+            iteration: 2,
+            environment: benchmarkMetadata(
+                lifecycle: .persistentWarmProjectRuntime,
+                lifecycleMode: .rootfsCacheHitRuntime,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .miss,
+                initfsCacheStatus: .miss,
+                hostPortProbeStatus: "unknown",
+                loadWindowStatus: "unknown"
+            ),
+            status: .measured,
+            durationsSeconds: Phase6BenchmarkDurations(up: nil, status: nil, logs: nil, cleanup: 0.4),
+            guest: nil,
+            hostPhysicalMemoryStatus: .blocked,
+            actionCount: 16,
+            cleanupStateDirectoryExistsAfterCleanup: true,
+            failure: nil
+        )
+
+        XCTAssertEqual(
+            Set(Stage8BenchmarkEvidenceValidator().validate(records: [invalid]).map(\.code)),
+            [
+                "stage8-lifecycle-mode-cache-mismatch",
+                "stage8-host-port-not-measured-missing",
+                "stage8-load-window-not-measured-missing",
+                "stage8-startup-duration-missing",
+                "stage8-rootfs-prep-duration-missing",
+                "stage8-initfs-prep-duration-missing",
+                "stage8-volume-duration-missing",
+                "stage8-pod-duration-missing",
+                "stage8-container-start-duration-missing",
+                "stage8-healthcheck-duration-missing",
+                "stage8-healthcheck-attempts-missing",
+                "stage8-guest-metrics-missing",
+                "stage8-process-rss-missing",
+                "stage8-data-footprint-missing",
+                "stage8-cleanup-leftovers"
+            ]
+        )
+    }
+
+    func testPhase6SeedImageStorePolicyRequiresSentinelAndProtectsExternalSources() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-seed-policy-\(UUID().uuidString)", isDirectory: true)
+        let ownedSeed = root
+            .appendingPathComponent(".container-compose-adapter", isDirectory: true)
+            .appendingPathComponent("benchmark-seed-image-stores", isDirectory: true)
+            .appendingPathComponent("stage6-arm64", isDirectory: true)
+        let externalSeed = root.appendingPathComponent("external-seed", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: ownedSeed, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: externalSeed, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(
+            try Phase6SeedImageStorePolicy.validateSeedSource(
+                ownedSeed,
+                allowExternal: false,
+                repositoryRoot: root
+            )
+        ) { error in
+            XCTAssertTrue("\(error)".contains(Phase6SeedImageStorePolicy.sentinelFileName))
+        }
+
+        try Phase6SeedImageStorePolicy.writeSentinel(in: ownedSeed)
+        XCTAssertNoThrow(
+            try Phase6SeedImageStorePolicy.validateSeedSource(
+                ownedSeed,
+                allowExternal: false,
+                repositoryRoot: root
+            )
+        )
+
+        try Phase6SeedImageStorePolicy.writeSentinel(in: externalSeed)
+        XCTAssertThrowsError(
+            try Phase6SeedImageStorePolicy.validateSeedSource(
+                externalSeed,
+                allowExternal: false,
+                repositoryRoot: root
+            )
+        ) { error in
+            XCTAssertTrue("\(error)".contains("outside adapter-owned benchmark seed cache"))
+        }
+        XCTAssertNoThrow(
+            try Phase6SeedImageStorePolicy.validateSeedSource(
+                externalSeed,
+                allowExternal: true,
+                repositoryRoot: root
+            )
+        )
+
+        let sourceExistsBeforeCleanup = FileManager.default.fileExists(atPath: externalSeed.path)
+        try Phase6SeedImageStorePolicy.assertCleanupDoesNotTargetSeedSource(
+            cleanupTarget: root.appendingPathComponent(".container-compose-adapter/cca-linuxpod-demo/runtime"),
+            seedSource: externalSeed
+        )
+        XCTAssertTrue(sourceExistsBeforeCleanup)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: externalSeed.path))
+        XCTAssertThrowsError(
+            try Phase6SeedImageStorePolicy.assertCleanupDoesNotTargetSeedSource(
+                cleanupTarget: root,
+                seedSource: externalSeed
+            )
+        ) { error in
+            XCTAssertTrue("\(error)".contains("contains seed image-store source"))
+        }
+    }
+
+    func testHostFootprintMetricAccumulatorTreatsCgroupUnlimitedAsUnlimited() {
+        XCTAssertEqual(
+            HostFootprintMetricAccumulator.sumSaturating([UInt64.max, 4]),
+            UInt64.max
+        )
+        XCTAssertEqual(
+            HostFootprintMetricAccumulator.sumCgroupMemoryLimit([512, 1024]),
+            HostFootprintCgroupMemoryLimit(bytes: 1536, unlimited: false)
+        )
+        XCTAssertEqual(
+            HostFootprintMetricAccumulator.sumCgroupMemoryLimit([UInt64.max, 1024]),
+            HostFootprintCgroupMemoryLimit(bytes: nil, unlimited: true)
+        )
+        XCTAssertEqual(
+            HostFootprintMetricAccumulator.sumCgroupMemoryLimit([UInt64.max - 3]),
+            HostFootprintCgroupMemoryLimit(bytes: nil, unlimited: true)
+        )
     }
 
     func testStage4MicrobenchmarkPlanCoversRootfsVolumeAndHealthcheckWithoutRuntimeMutation() throws {
@@ -1679,6 +2120,42 @@ final class RuntimeContractTests: XCTestCase {
             .project
         return Stage4MicrobenchmarkPlanner(store: ProjectRuntimeStore(baseDirectory: root))
             .plan(project: project, timestamp: timestamp)
+    }
+
+    private func benchmarkMetadata(
+        lifecycle: BenchmarkLifecycle,
+        lifecycleMode: BenchmarkLifecycleMode? = nil,
+        seedImageStoreCopied: Bool = false,
+        imageCacheStatus: BenchmarkCacheStatus,
+        rootfsCacheStatus: BenchmarkCacheStatus,
+        initfsCacheStatus: BenchmarkCacheStatus,
+        volumeExistedBeforeRun: Bool = false,
+        podExistedBeforeRun: Bool = false,
+        hostPortProbeStatus: String = "notMeasured",
+        loadWindowStatus: String = "notMeasured"
+    ) -> BenchmarkRunMetadata {
+        BenchmarkRunMetadata(
+            runtime: .linuxpod,
+            runtimeVersion: "test",
+            containerizationVersion: "0.26.5",
+            appleContainerCLIVersion: nil,
+            macOSVersion: "test-macos",
+            hostArchitecture: "arm64",
+            lifecycle: lifecycle,
+            lifecycleMode: lifecycleMode,
+            seedImageStoreRequested: seedImageStoreCopied,
+            seedImageStoreCopied: seedImageStoreCopied,
+            seedImageStoreValidated: seedImageStoreCopied,
+            projectRuntimeExistedBeforeRun: podExistedBeforeRun || volumeExistedBeforeRun,
+            podExistedBeforeRun: podExistedBeforeRun,
+            imageCacheStatus: imageCacheStatus,
+            rootfsCacheStatus: rootfsCacheStatus,
+            initfsCacheStatus: initfsCacheStatus,
+            volumeExistedBeforeRun: volumeExistedBeforeRun,
+            hostPortProbeStatus: hostPortProbeStatus,
+            hostPortPublishingNotImplemented: true,
+            loadWindowStatus: loadWindowStatus
+        )
     }
 
     private func completeStage4Measurements(

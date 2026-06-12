@@ -68,7 +68,8 @@ let package = Package(
             name: "ContainerComposeAdapterPhase6Benchmark",
             dependencies: [
                 "ContainerComposeAdapter",
-                "ContainerComposeAdapterLinuxPod"
+                "ContainerComposeAdapterLinuxPod",
+                .product(name: "Containerization", package: "containerization")
             ]
         ),
         .executableTarget(
