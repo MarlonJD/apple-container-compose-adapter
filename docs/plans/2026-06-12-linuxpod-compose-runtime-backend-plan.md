@@ -428,11 +428,13 @@ Phase 7 is intentionally not started after the Phase 6
 a new hypothesis such as reusable warm LinuxPod lifecycle, persistent rootfs
 cache strategy, or upstream `apple/containerization` changes.
 
-2026-06-12 update: the user approved a narrow Phase 6B root-cause plan for the
-reusable lifecycle/rootfs-cache hypothesis. Phase 6B is tracked separately in
-[LinuxPod Phase 6B Root-Cause Implementation Plan](2026-06-12-linuxpod-phase-6b-root-cause-plan.md)
-and does not change the product direction, start Phase 7, or make LinuxPod the
-recommended backend runtime.
+2026-06-12 update: a narrow Phase 6B root-cause plan was drafted for the
+reusable lifecycle/rootfs-cache hypothesis, then archived before execution
+because it belonged to the older Phase 6 root-cause track. The active product
+direction now starts with the
+[Compose Frontend To LocalDevProject Plan](completed/2026-06-12-compose-frontend-localdevproject-plan.md)
+and keeps Phase 7 LinuxPod optimization closed unless a later explicit
+hypothesis is approved.
 
 - [ ] Optimize only after Phase 6 identifies a real bottleneck.
 - [ ] Consider warm LinuxPod reuse, image/rootfs reuse, smaller init surface,

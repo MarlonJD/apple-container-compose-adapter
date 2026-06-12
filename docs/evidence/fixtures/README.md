@@ -1,8 +1,21 @@
 # Efficiency Pilot Public Fixtures
 
-These fixtures are public, local-only workloads for the Efficiency And Shared
-Runtime Pilot Plan. They are not documented adapter examples yet because the
-adapter has not implemented or verified these behaviors.
+These fixtures are public, local-only workloads for parser, planner, and runtime
+research. The adapter now uses them as `ComposeFrontend` parser fixtures for
+the `LocalDevProject` -> dry-run path. They are still not runtime execution
+examples unless a separate task explicitly approves runtime mutation.
+
+## Supported Adapter Parser Slice
+
+The current `ComposeFrontend` slice reads these fixture Compose files into
+`LocalDevProject` and renders dry-run plans. The supported subset covers public
+images, command and healthcheck intent, deterministic host ports, named
+volumes, dependency conditions, environment values with secret redaction in
+dry-run output, and explicit migrate/seed job roles from fixture labels.
+
+Runtime mutation, image pulls, registry login, host DNS mutation, Kubernetes
+input, persistent LinuxPod hotplug, rootfs-cache optimization, writable layers,
+and Docker-compatible backend switching remain out of scope for these fixtures.
 
 ## Safety Rules
 

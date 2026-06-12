@@ -15,6 +15,7 @@ public struct LocalDevProject: Codable, Equatable, Sendable {
     public let secrets: [LocalDevSecret]
     public let configs: [LocalDevConfig]
     public let profiles: [String]
+    public let diagnostics: [Diagnostic]
 
     public init(
         id: String,
@@ -27,7 +28,8 @@ public struct LocalDevProject: Codable, Equatable, Sendable {
         routes: [LocalDevRoute] = [],
         secrets: [LocalDevSecret] = [],
         configs: [LocalDevConfig] = [],
-        profiles: [String] = []
+        profiles: [String] = [],
+        diagnostics: [Diagnostic] = []
     ) {
         self.id = id
         self.name = name
@@ -40,10 +42,60 @@ public struct LocalDevProject: Codable, Equatable, Sendable {
         self.secrets = secrets
         self.configs = configs
         self.profiles = profiles
+        self.diagnostics = diagnostics
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case sourceFiles
+        case services
+        case jobs
+        case volumes
+        case networks
+        case routes
+        case secrets
+        case configs
+        case profiles
+        case diagnostics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            name: try container.decode(String.self, forKey: .name),
+            sourceFiles: try container.decode([String].self, forKey: .sourceFiles),
+            services: try container.decode([LocalDevService].self, forKey: .services),
+            jobs: try container.decode([LocalDevJob].self, forKey: .jobs),
+            volumes: try container.decode([LocalDevVolume].self, forKey: .volumes),
+            networks: try container.decode([LocalDevNetwork].self, forKey: .networks),
+            routes: try container.decode([LocalDevRoute].self, forKey: .routes),
+            secrets: try container.decode([LocalDevSecret].self, forKey: .secrets),
+            configs: try container.decode([LocalDevConfig].self, forKey: .configs),
+            profiles: try container.decode([String].self, forKey: .profiles),
+            diagnostics: try container.decodeIfPresent([Diagnostic].self, forKey: .diagnostics) ?? []
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(sourceFiles, forKey: .sourceFiles)
+        try container.encode(services, forKey: .services)
+        try container.encode(jobs, forKey: .jobs)
+        try container.encode(volumes, forKey: .volumes)
+        try container.encode(networks, forKey: .networks)
+        try container.encode(routes, forKey: .routes)
+        try container.encode(secrets, forKey: .secrets)
+        try container.encode(configs, forKey: .configs)
+        try container.encode(profiles, forKey: .profiles)
+        try container.encode(diagnostics, forKey: .diagnostics)
     }
 
     public func runtimePlan() -> RuntimePlan {
-        var diagnostics: [Diagnostic] = []
+        var diagnostics = self.diagnostics
         let servicePlans = services.map { service in
             service.runtimeServicePlan(diagnostics: &diagnostics)
         }

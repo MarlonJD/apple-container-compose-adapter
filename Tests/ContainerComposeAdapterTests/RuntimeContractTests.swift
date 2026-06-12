@@ -210,6 +210,29 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(plan.services.first?.mounts, [])
     }
 
+    func testLocalDevProjectDecodesOlderPayloadWithoutDiagnostics() throws {
+        let json = """
+        {
+          "id": "legacy",
+          "name": "Legacy",
+          "sourceFiles": [],
+          "services": [],
+          "jobs": [],
+          "volumes": [],
+          "networks": [],
+          "routes": [],
+          "secrets": [],
+          "configs": [],
+          "profiles": []
+        }
+        """
+
+        let project = try JSONDecoder().decode(LocalDevProject.self, from: Data(json.utf8))
+
+        XCTAssertEqual(project.id, "legacy")
+        XCTAssertEqual(project.diagnostics, [])
+    }
+
     func testRuntimeLogCaptureSummarizesStdoutAndStderrForEvidence() {
         let capture = RuntimeLogCapture()
 
