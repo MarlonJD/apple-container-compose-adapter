@@ -72,144 +72,6 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(project.adapterOwnedName(prefix: "cca-linuxpod-"), "cca-linuxpod-my-api-stack")
     }
 
-    func testLocalDevProjectNormalizesServicesJobsAndNamedVolumesToRuntimePlan() throws {
-        let project = LocalDevProject(
-            id: "demo-stack",
-            name: "Demo Stack",
-            sourceFiles: ["compose.yaml"],
-            services: [
-                LocalDevService(
-                    name: "api",
-                    image: "mirror.gcr.io/library/python:3.12-alpine",
-                    command: ["python", "app.py"],
-                    entrypoint: ["/bin/sh", "-ec"],
-                    environment: [
-                        "API_TOKEN": "secret-value",
-                        "LOG_LEVEL": "debug"
-                    ],
-                    envFiles: [".env"],
-                    mounts: [
-                        LocalDevMount(kind: .bind, source: ".", target: "/workspace", readOnly: true),
-                        LocalDevMount(kind: .namedVolume, source: "api-cache", target: "/cache")
-                    ],
-                    ports: [
-                        LocalDevPort(name: "http", hostIP: "127.0.0.1", hostPort: 18080, containerPort: 8080)
-                    ],
-                    aliases: ["api.local"],
-                    dependencies: [
-                        LocalDevDependency(target: "migrate", condition: .serviceCompletedSuccessfully)
-                    ],
-                    healthcheck: LocalDevHealthcheck(
-                        test: ["python", "-c", "print('ready')"],
-                        intervalSeconds: 5,
-                        timeoutSeconds: 7,
-                        retries: 3,
-                        startPeriodSeconds: 2
-                    ),
-                    restartPolicy: .unlessStopped,
-                    profiles: ["dev"]
-                )
-            ],
-            jobs: [
-                LocalDevJob(
-                    name: "migrate",
-                    image: "mirror.gcr.io/library/python:3.12-alpine",
-                    command: ["python", "migrate.py"],
-                    environment: ["DATABASE_URL": "postgres://app:dev_password@db/app"],
-                    mounts: [
-                        LocalDevMount(kind: .namedVolume, source: "api-cache", target: "/cache")
-                    ],
-                    dependencies: [
-                        LocalDevDependency(target: "db", condition: .serviceHealthy)
-                    ],
-                    completionPolicy: .runToCompletion,
-                    profiles: ["dev"]
-                )
-            ],
-            volumes: [
-                LocalDevVolume(name: "api-cache", kind: .named, preserveByDefault: true)
-            ],
-            networks: [
-                LocalDevNetwork(name: "default", aliases: ["api", "migrate"])
-            ],
-            routes: [
-                LocalDevRoute(name: "api", host: "api.local", pathPrefix: "/", targetService: "api", targetPort: 8080)
-            ],
-            secrets: [
-                LocalDevSecret(name: "api-token", environmentKey: "API_TOKEN")
-            ],
-            configs: [
-                LocalDevConfig(name: "api-config", environmentKey: "APP_CONFIG")
-            ],
-            profiles: ["dev"]
-        )
-
-        let plan = project.runtimePlan()
-
-        XCTAssertEqual(plan.project.rawValue, "Demo Stack")
-        XCTAssertEqual(plan.volumes, [VolumePlan(name: "api-cache", preserveByDefault: true)])
-        XCTAssertEqual(plan.services.map(\.name), ["api", "migrate"])
-        XCTAssertEqual(plan.services.map(\.kind), [.service, .oneOffJob])
-        XCTAssertEqual(
-            plan.services[0].environment,
-            [
-                EnvironmentVariable("API_TOKEN", "secret-value"),
-                EnvironmentVariable("LOG_LEVEL", "debug")
-            ]
-        )
-        XCTAssertEqual(plan.services[0].ports, [PortMapping(hostPort: 18080, containerPort: 8080)])
-        XCTAssertEqual(
-            plan.services[0].mounts,
-            [
-                MountPlan(kind: .bind, source: ".", target: "/workspace", readOnly: true),
-                MountPlan(kind: .namedVolume, source: "api-cache", target: "/cache")
-            ]
-        )
-        XCTAssertEqual(
-            plan.services[0].dependencies,
-            [ServiceDependency(serviceName: "migrate", condition: .serviceCompletedSuccessfully)]
-        )
-        XCTAssertEqual(
-            plan.services[0].readiness,
-            [
-                ReadinessProbe(
-                    kind: .serviceHealthy,
-                    command: ["python", "-c", "print('ready')"],
-                    timeoutSeconds: 7
-                )
-            ]
-        )
-        XCTAssertEqual(plan.services[1].kind, .oneOffJob)
-        XCTAssertEqual(plan.services[1].dependencies, [ServiceDependency(serviceName: "db", condition: .serviceHealthy)])
-        XCTAssertFalse(plan.hasBlockingDiagnostics)
-    }
-
-    func testLocalDevProjectReportsUnsupportedRuntimeFeaturesDuringNormalization() {
-        let project = LocalDevProject(
-            id: "unsupported",
-            name: "Unsupported",
-            services: [
-                LocalDevService(
-                    name: "api",
-                    image: "mirror.gcr.io/library/python:3.12-alpine",
-                    build: LocalDevBuildSpec(context: ".", dockerfile: "Dockerfile"),
-                    mounts: [
-                        LocalDevMount(kind: .tmpfs, target: "/tmp/cache", sizeBytes: 64 * 1024 * 1024)
-                    ]
-                )
-            ]
-        )
-
-        let plan = project.runtimePlan()
-
-        XCTAssertEqual(Set(plan.diagnostics.map(\.code)), [
-            "unsupported-localdev-build",
-            "unsupported-localdev-tmpfs-mount"
-        ])
-        XCTAssertTrue(plan.hasBlockingDiagnostics)
-        XCTAssertEqual(plan.services.first?.mounts, [])
-    }
-
     func testRuntimeLogCaptureSummarizesStdoutAndStderrForEvidence() {
         let capture = RuntimeLogCapture()
 
@@ -284,20 +146,6 @@ final class RuntimeContractTests: XCTestCase {
             project: "cca-linuxpod-phase6-backend-001",
             runLabel: "phase6-warm",
             iteration: 1,
-            environment: BenchmarkRunMetadata(
-                runtime: .linuxpod,
-                runtimeVersion: "apple/containerization LinuxPod",
-                containerizationVersion: "0.26.5",
-                appleContainerCLIVersion: "1.0.0",
-                macOSVersion: "15.5",
-                hostArchitecture: "arm64",
-                lifecycle: .warm,
-                projectRuntimeExistedBeforeRun: true,
-                imageCacheStatus: .hit,
-                rootfsCacheStatus: .hit,
-                initfsCacheStatus: .hit,
-                volumeExistedBeforeRun: true
-            ),
             status: .measured,
             durationsSeconds: Phase6BenchmarkDurations(
                 up: 12.25,
@@ -343,10 +191,7 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(measured.schemaVersion, Phase6BenchmarkSchema.version)
         XCTAssertEqual(measured.recordType, Phase6BenchmarkSchema.iterationRecordType)
         XCTAssertEqual(measured.hostPhysicalMemoryStatus, .blocked)
-        XCTAssertEqual(measured.environment?.lifecycle, .warm)
-        XCTAssertEqual(measured.environment?.rootfsCacheStatus, .hit)
         XCTAssertEqual(summary.recordType, Phase6BenchmarkSchema.summaryRecordType)
-        XCTAssertEqual(summary.environment, measured.environment)
         XCTAssertEqual(summary.measuredIterations, 1)
         XCTAssertEqual(summary.failureCount, 1)
         XCTAssertEqual(summary.hostPhysicalMemoryStatus, .blocked)

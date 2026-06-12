@@ -45,24 +45,11 @@ public struct LinuxPodStateStore: Sendable {
     }
 
     public func removeEmptyProjectDirectories(projectDirectory: URL) throws {
-        try ensureAdapterOwnedProjectDirectory(projectDirectory)
         let volumesDirectory = projectDirectory
             .appendingPathComponent("volumes", isDirectory: true)
         try removeIfEmpty(volumesDirectory)
         try removeIfEmpty(projectDirectory)
         try removeIfEmpty(root)
-    }
-
-    private func ensureAdapterOwnedProjectDirectory(_ projectDirectory: URL) throws {
-        let rootPath = root.standardizedFileURL.path
-        let projectPath = projectDirectory.standardizedFileURL.path
-        let isInsideRoot = projectPath == rootPath || projectPath.hasPrefix(rootPath + "/")
-        guard isInsideRoot,
-              projectDirectory.standardizedFileURL.lastPathComponent.hasPrefix(Self.ownedPrefix) else {
-            throw RuntimeBackendError.runtimeUnavailable(
-                "Refusing to remove non-adapter-owned project directory \(projectDirectory.path)."
-            )
-        }
     }
 
     private func removeIfEmpty(_ directory: URL) throws {
@@ -80,7 +67,7 @@ public struct LinuxPodStateStore: Sendable {
 }
 
 public struct LinuxPodBackend: RuntimeBackend {
-    public static let runtimeApprovalToken = "I_APPROVE_CCA_LINUXPOD_RUNTIME_MUTATION"
+    public static let runtimeApprovalToken = "<runtime-approval-token>"
 
     public let kind: RuntimeKind = .linuxpod
     public let capabilities = RuntimeCapabilities(

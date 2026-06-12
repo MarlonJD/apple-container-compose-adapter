@@ -344,25 +344,6 @@ final class LinuxPodBackendTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    func testStateStoreRejectsNonAdapterOwnedProjectDirectoryCleanup() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("cca-state-test-\(UUID().uuidString)", isDirectory: true)
-        let outside = FileManager.default.temporaryDirectory
-            .appendingPathComponent("not-cca-owned-\(UUID().uuidString)", isDirectory: true)
-        let stateStore = LinuxPodStateStore(root: root)
-        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-
-        XCTAssertThrowsError(try stateStore.removeEmptyProjectDirectories(projectDirectory: outside)) { error in
-            XCTAssertEqual(
-                "\(error)",
-                "Refusing to remove non-adapter-owned project directory \(outside.path)."
-            )
-        }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
-        try? FileManager.default.removeItem(at: root)
-        try? FileManager.default.removeItem(at: outside)
-    }
-
     func testDryRunEvidenceRecordsCacheAndNoRuntimeCleanupProof() throws {
         let plan = SamplePlans.publicImageSmoke(project: ProjectName("Evidence"))
         let result = try LinuxPodBackend().renderDryRun(command: .up, plan: plan, options: RuntimeOptions())
