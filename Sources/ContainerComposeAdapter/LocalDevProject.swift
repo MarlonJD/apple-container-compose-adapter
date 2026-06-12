@@ -95,22 +95,7 @@ public struct LocalDevProject: Codable, Equatable, Sendable {
     }
 
     public func runtimePlan() -> RuntimePlan {
-        var diagnostics = self.diagnostics
-        let servicePlans = services.map { service in
-            service.runtimeServicePlan(diagnostics: &diagnostics)
-        }
-        let jobPlans = jobs.map { job in
-            job.runtimeServicePlan(diagnostics: &diagnostics)
-        }
-        let runtimeVolumes = volumes.compactMap { volume in
-            volume.runtimeVolumePlan(diagnostics: &diagnostics)
-        }
-        return RuntimePlan(
-            project: ProjectName(name),
-            services: servicePlans + jobPlans,
-            volumes: runtimeVolumes,
-            diagnostics: diagnostics
-        )
+        AppleNativePlanner().plan(self).runtimePlan
     }
 }
 
@@ -127,6 +112,7 @@ public struct LocalDevService: Codable, Equatable, Sendable {
     public let aliases: [String]
     public let dependencies: [LocalDevDependency]
     public let healthcheck: LocalDevHealthcheck?
+    public let resources: LocalDevResourcePolicy?
     public let restartPolicy: LocalDevRestartPolicy
     public let profiles: [String]
 
@@ -143,6 +129,7 @@ public struct LocalDevService: Codable, Equatable, Sendable {
         aliases: [String] = [],
         dependencies: [LocalDevDependency] = [],
         healthcheck: LocalDevHealthcheck? = nil,
+        resources: LocalDevResourcePolicy? = nil,
         restartPolicy: LocalDevRestartPolicy = .unlessStopped,
         profiles: [String] = []
     ) {
@@ -158,29 +145,11 @@ public struct LocalDevService: Codable, Equatable, Sendable {
         self.aliases = aliases
         self.dependencies = dependencies
         self.healthcheck = healthcheck
+        self.resources = resources
         self.restartPolicy = restartPolicy
         self.profiles = profiles
     }
 
-    fileprivate func runtimeServicePlan(diagnostics: inout [Diagnostic]) -> ServicePlan {
-        if build != nil {
-            diagnostics.append(.unsupported(
-                "services.\(name).build",
-                suggestion: "Use a prebuilt image until local build planning is implemented."
-            ).renamed(code: "unsupported-localdev-build"))
-        }
-        return ServicePlan(
-            name: name,
-            kind: .service,
-            image: image,
-            command: entrypoint + command,
-            environment: environment.runtimeEnvironment,
-            ports: ports.runtimePorts(diagnostics: &diagnostics, owner: "services.\(name).ports"),
-            mounts: mounts.runtimeMounts(diagnostics: &diagnostics, owner: "services.\(name).mounts"),
-            readiness: healthcheck.map { [$0.runtimeReadinessProbe()] } ?? [],
-            dependencies: dependencies.runtimeDependencies
-        )
-    }
 }
 
 public struct LocalDevJob: Codable, Equatable, Sendable {
@@ -193,6 +162,7 @@ public struct LocalDevJob: Codable, Equatable, Sendable {
     public let mounts: [LocalDevMount]
     public let dependencies: [LocalDevDependency]
     public let completionPolicy: LocalDevCompletionPolicy
+    public let resources: LocalDevResourcePolicy?
     public let profiles: [String]
 
     public init(
@@ -205,6 +175,7 @@ public struct LocalDevJob: Codable, Equatable, Sendable {
         mounts: [LocalDevMount] = [],
         dependencies: [LocalDevDependency] = [],
         completionPolicy: LocalDevCompletionPolicy = .runToCompletion,
+        resources: LocalDevResourcePolicy? = nil,
         profiles: [String] = []
     ) {
         self.name = name
@@ -216,27 +187,10 @@ public struct LocalDevJob: Codable, Equatable, Sendable {
         self.mounts = mounts
         self.dependencies = dependencies
         self.completionPolicy = completionPolicy
+        self.resources = resources
         self.profiles = profiles
     }
 
-    fileprivate func runtimeServicePlan(diagnostics: inout [Diagnostic]) -> ServicePlan {
-        if build != nil {
-            diagnostics.append(.unsupported(
-                "jobs.\(name).build",
-                suggestion: "Use a prebuilt image until local build planning is implemented."
-            ).renamed(code: "unsupported-localdev-build"))
-        }
-        return ServicePlan(
-            name: name,
-            kind: .oneOffJob,
-            image: image,
-            command: command,
-            environment: environment.runtimeEnvironment,
-            mounts: mounts.runtimeMounts(diagnostics: &diagnostics, owner: "jobs.\(name).mounts"),
-            readiness: [ReadinessProbe(kind: .serviceCompletedSuccessfully, timeoutSeconds: 60)],
-            dependencies: dependencies.runtimeDependencies
-        )
-    }
 }
 
 public struct LocalDevBuildSpec: Codable, Equatable, Sendable {
@@ -255,6 +209,22 @@ public struct LocalDevBuildSpec: Codable, Equatable, Sendable {
         self.dockerfile = dockerfile
         self.target = target
         self.args = args
+    }
+}
+
+public struct LocalDevResourcePolicy: Codable, Equatable, Sendable {
+    public let cpuLimit: String?
+    public let memoryLimitBytes: Int64?
+    public let diskLimitBytes: Int64?
+
+    public init(
+        cpuLimit: String? = nil,
+        memoryLimitBytes: Int64? = nil,
+        diskLimitBytes: Int64? = nil
+    ) {
+        self.cpuLimit = cpuLimit
+        self.memoryLimitBytes = memoryLimitBytes
+        self.diskLimitBytes = diskLimitBytes
     }
 }
 
@@ -288,22 +258,6 @@ public struct LocalDevVolume: Codable, Equatable, Sendable {
         self.labels = labels
     }
 
-    fileprivate func runtimeVolumePlan(diagnostics: inout [Diagnostic]) -> VolumePlan? {
-        switch kind {
-        case .named:
-            return VolumePlan(name: name, preserveByDefault: preserveByDefault)
-        case .bind, .tmpfs:
-            diagnostics.append(
-                Diagnostic(
-                    severity: .warning,
-                    code: "non-named-localdev-volume",
-                    message: "Project volume \(name) is represented in LocalDevProject but is not a runtime named volume.",
-                    suggestion: "Use service mounts for bind or tmpfs intent until runtime support is expanded."
-                )
-            )
-            return nil
-        }
-    }
 }
 
 public enum LocalDevMountKind: String, Codable, Equatable, Sendable {
@@ -333,41 +287,6 @@ public struct LocalDevMount: Codable, Equatable, Sendable {
         self.sizeBytes = sizeBytes
     }
 
-    fileprivate func runtimeMountPlan(diagnostics: inout [Diagnostic], owner: String) -> MountPlan? {
-        switch kind {
-        case .bind:
-            guard let source, !source.isEmpty else {
-                diagnostics.append(invalidMountSourceDiagnostic(owner: owner, kind: kind))
-                return nil
-            }
-            return MountPlan(kind: .bind, source: source, target: target, readOnly: readOnly)
-        case .namedVolume:
-            guard let source, !source.isEmpty else {
-                diagnostics.append(invalidMountSourceDiagnostic(owner: owner, kind: kind))
-                return nil
-            }
-            return MountPlan(kind: .namedVolume, source: source, target: target, readOnly: readOnly)
-        case .tmpfs:
-            diagnostics.append(
-                Diagnostic(
-                    severity: .blocking,
-                    code: "unsupported-localdev-tmpfs-mount",
-                    message: "\(owner) requests tmpfs mount \(target), which is not implemented by the current LinuxPod runtime plan.",
-                    suggestion: "Use a named volume or remove the tmpfs mount until tmpfs runtime support is added."
-                )
-            )
-            return nil
-        }
-    }
-
-    private func invalidMountSourceDiagnostic(owner: String, kind: LocalDevMountKind) -> Diagnostic {
-        Diagnostic(
-            severity: .blocking,
-            code: "invalid-localdev-mount-source",
-            message: "\(owner) contains a \(kind.rawValue) mount without a source.",
-            suggestion: "Provide a named volume name or bind source path."
-        )
-    }
 }
 
 public struct LocalDevPort: Codable, Equatable, Sendable {
@@ -391,20 +310,6 @@ public struct LocalDevPort: Codable, Equatable, Sendable {
         self.protocolName = protocolName
     }
 
-    fileprivate func runtimePortMapping(diagnostics: inout [Diagnostic], owner: String) -> PortMapping? {
-        guard let hostPort else {
-            diagnostics.append(
-                Diagnostic(
-                    severity: .blocking,
-                    code: "unsupported-localdev-dynamic-port",
-                    message: "\(owner) requests dynamic host port publishing for container port \(containerPort).",
-                    suggestion: "Choose a deterministic host port for the current LinuxPod runtime plan."
-                )
-            )
-            return nil
-        }
-        return PortMapping(hostPort: hostPort, containerPort: containerPort, protocolName: protocolName)
-    }
 }
 
 public enum LocalDevDependencyCondition: String, Codable, Equatable, Sendable {
@@ -450,13 +355,6 @@ public struct LocalDevHealthcheck: Codable, Equatable, Sendable {
         self.startPeriodSeconds = startPeriodSeconds
     }
 
-    fileprivate func runtimeReadinessProbe() -> ReadinessProbe {
-        ReadinessProbe(
-            kind: .serviceHealthy,
-            command: test,
-            timeoutSeconds: Int(timeoutSeconds.rounded(.up))
-        )
-    }
 }
 
 public enum LocalDevRestartPolicy: String, Codable, Equatable, Sendable {
@@ -538,64 +436,5 @@ public struct LocalDevNetwork: Codable, Equatable, Sendable {
     public init(name: String, aliases: [String] = []) {
         self.name = name
         self.aliases = aliases
-    }
-}
-
-private extension Dictionary where Key == String, Value == String {
-    var runtimeEnvironment: [EnvironmentVariable] {
-        keys.sorted().map { key in
-            EnvironmentVariable(key, self[key] ?? "")
-        }
-    }
-}
-
-private extension Array where Element == LocalDevPort {
-    func runtimePorts(diagnostics: inout [Diagnostic], owner: String) -> [PortMapping] {
-        compactMap { port in
-            port.runtimePortMapping(diagnostics: &diagnostics, owner: owner)
-        }
-    }
-}
-
-private extension Array where Element == LocalDevMount {
-    func runtimeMounts(diagnostics: inout [Diagnostic], owner: String) -> [MountPlan] {
-        compactMap { mount in
-            mount.runtimeMountPlan(diagnostics: &diagnostics, owner: owner)
-        }
-    }
-}
-
-private extension Array where Element == LocalDevDependency {
-    var runtimeDependencies: [ServiceDependency] {
-        map { dependency in
-            ServiceDependency(
-                serviceName: dependency.target,
-                condition: dependency.condition.runtimeReadinessKind
-            )
-        }
-    }
-}
-
-private extension LocalDevDependencyCondition {
-    var runtimeReadinessKind: ReadinessKind {
-        switch self {
-        case .serviceStarted:
-            return .serviceStarted
-        case .serviceHealthy:
-            return .serviceHealthy
-        case .serviceCompletedSuccessfully:
-            return .serviceCompletedSuccessfully
-        }
-    }
-}
-
-private extension Diagnostic {
-    func renamed(code: String) -> Diagnostic {
-        Diagnostic(
-            severity: severity,
-            code: code,
-            message: message,
-            suggestion: suggestion
-        )
     }
 }

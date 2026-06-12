@@ -149,8 +149,10 @@ final class ComposeFrontendTests: XCTestCase {
         let project = try ComposeFrontend()
             .parseProject(fileURL: fixtureURL("simple-web/compose.yaml"), projectName: "simple-web")
             .project
-        let plan = project.runtimePlan()
+        let plannerResult = AppleNativePlanner().plan(project)
+        let plan = plannerResult.runtimePlan
 
+        XCTAssertEqual(plannerResult.diagnostics, [])
         let dryRun = try NoopDryRunBackend().renderDryRun(command: .up, plan: plan, options: RuntimeOptions())
 
         XCTAssertEqual(dryRun.mutatingActionCount, 0)
@@ -163,8 +165,10 @@ final class ComposeFrontendTests: XCTestCase {
         let project = try ComposeFrontend()
             .parseProject(fileURL: fixtureURL("backend-shaped/compose.yaml"), projectName: "backend-shaped")
             .project
-        let plan = project.runtimePlan()
+        let plannerResult = AppleNativePlanner().plan(project)
+        let plan = plannerResult.runtimePlan
 
+        XCTAssertEqual(plannerResult.diagnostics, [])
         XCTAssertFalse(plan.hasBlockingDiagnostics)
 
         let backend = LinuxPodBackend(

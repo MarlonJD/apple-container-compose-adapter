@@ -13,6 +13,38 @@ one LocalDevProject = one persistent LinuxPod runtime
 
 The runtime should be explicit, inspectable, benchmarked, and safe to clean up.
 
+## Project Runtime Store
+
+The persistent runtime model needs adapter-owned state rooted under:
+
+```text
+~/Library/Application Support/ContainerComposeAdapter/
+  cache/
+    images/
+    rootfs-by-digest/
+    initfs/
+    kernels/
+    build/
+  projects/
+    <project-id>/
+      .container-compose-adapter-owned
+      project-state.json
+      project-storage.ext4
+      pod/
+      services/
+      jobs/
+      volumes/
+      ports/
+      logs/
+      metrics/
+      tmp/
+```
+
+Every destructive cleanup path must validate both that the path is inside the
+adapter projects directory and that the project sentinel exists. Normal
+cleanup must not touch reusable global caches, non-adapter-owned paths, or
+global runtime state.
+
 ## Cold Lifecycle
 
 Cold mode means:
@@ -181,6 +213,25 @@ Minimum runtime surface:
 - `status` reports service/job lifecycle state;
 - `exec` is planned as a future operation for service debugging;
 - all outputs redact likely secrets.
+
+## WSL-inspired Runtime Experiments
+
+Microsoft WSL container is not a backend target, but it is a useful
+optimization reference for persistent session/storage/event/recovery design.
+Do not add dockerd or containerd. The equivalent Apple-native research ideas
+are:
+
+- `ProjectSessionManager` for persistent LinuxPod reconnect and recovery;
+- `project-storage.ext4` attach/mount into the guest;
+- `/var/lib/cca` as the Linux-side state root;
+- guest-side `cca-agent` feasibility;
+- event tracker;
+- volume registry;
+- port registry;
+- service and job status registry;
+- healthcheck via agent vs host exec benchmark;
+- log stream via agent vs current host-call approach;
+- state recovery after crash, failed run, or interrupted cleanup.
 
 ## Cleanup Safety
 

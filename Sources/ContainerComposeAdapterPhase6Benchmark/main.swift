@@ -310,6 +310,7 @@ private func benchmarkEnvironment(
     let runtimeDirectory = backend.stateStore.runtimeDirectory(for: plan.project)
     return BenchmarkRunMetadata(
         runtime: .linuxpod,
+        targetName: options.lifecycle == .warm ? "future LinuxPod warm" : "current LinuxPod cold",
         runtimeVersion: "apple/containerization LinuxPod",
         containerizationVersion: ContainerizationLinuxPodRuntimeExecutor.containerizationVersion,
         appleContainerCLIVersion: nil,

@@ -2,9 +2,7 @@
 
 ## Product Rule
 
-Kubernetes support is an input/frontend feature. It is not a full Kubernetes
-cluster, not a production distribution, and not a kubelet/controller/scheduler
-replacement.
+Kubernetes support is a future input/frontend feature. It is not a full Kubernetes distribution, not a production cluster, and not a kubelet/controller/scheduler replacement.
 
 The supported path is:
 

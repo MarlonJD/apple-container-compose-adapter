@@ -39,6 +39,24 @@ comparison blocked until a reliable attribution source exists.
 
 This project is not affiliated with Apple or Docker.
 
+## Not Another Container Compose Wrapper
+
+This project is not intended to duplicate existing Apple Container Compose wrappers such as [`Mcrich23/Container-Compose`](https://github.com/Mcrich23/Container-Compose).
+Existing tools primarily map Docker Compose files onto Apple `container`
+CLI/API behavior. That is a useful layer, and it should remain an external
+comparison point rather than becoming this repository's implementation target.
+
+Container Compose Adapter investigates whether `apple/containerization`
+LinuxPod can become a high-performance Apple-native project runtime for
+backend-shaped local development workloads, using a persistent LinuxPod project runtime, image/rootfs/initfs caches, reusable Linux-side ext4 named volumes,
+service DNS, deterministic ports, healthchecks, one-off jobs, logs/status/exec,
+a recovery/event model, metrics, diagnostics, and safe adapter-owned cleanup.
+
+Docker Compose files are the primary input. Kubernetes is a future local-development input subset, not a full Kubernetes distribution. Docker
+Desktop, OrbStack, Colima, Podman, Lima, Rancher Desktop, and Microsoft WSL
+container are comparison baselines or optimization references only. Microsoft WSL container is an optimization reference only, not a backend target. This
+project does not claim host RAM savings without reliable host-level evidence.
+
 ## Product Direction
 
 Target architecture:
@@ -95,6 +113,8 @@ parsing yet. Those are planned or research items, not current behavior.
 - [LinuxPod persistent project runtime](docs/linuxpod-persistent-project-runtime.md)
 - [Kubernetes input subset](docs/kubernetes-input-subset.md)
 - [Benchmark and metrics plan](docs/benchmark-and-metrics-plan.md)
+- [Competitive context: Container-Compose](docs/competitive-context/container-compose.md)
+- [Optimization reference: WSL container](docs/optimization-references/wsl-container.md)
 
 ## Build And Test
 

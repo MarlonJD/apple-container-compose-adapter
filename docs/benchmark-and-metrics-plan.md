@@ -14,12 +14,13 @@ Do not claim host RAM savings without reliable host-level evidence.
 Every benchmark record should carry enough context to interpret results:
 
 - runtime kind;
+- target runtime name;
 - runtime version or implementation surface;
 - `apple/containerization` version;
 - Apple `container` CLI version when used;
 - macOS version;
 - host architecture;
-- lifecycle mode: cold or warm;
+- lifecycle mode: cold or warm, encoded in evidence as `cold_or_warm`;
 - project id;
 - whether the project runtime existed before the run;
 - image cache hit/miss;
@@ -47,11 +48,13 @@ Required scenarios:
    - published port;
    - load window.
 5. DNS/connectivity test.
-6. Port publishing and conflict test.
-7. Bind mount I/O test.
-8. Named volume I/O test.
-9. Rootfs preparation microbenchmark.
-10. Cleanup and stale-state test.
+6. One-off job test.
+7. Named volume semantics test.
+8. Port publishing and conflict test.
+9. Bind mount I/O test.
+10. Named volume I/O test.
+11. Rootfs preparation microbenchmark.
+12. Cleanup and stale-state test.
 
 ## Metrics
 
@@ -62,6 +65,8 @@ Record:
 - healthcheck attempts;
 - job duration and exit code;
 - log/status latency;
+- DNS success or failure;
+- port publish time to first byte;
 - guest cgroup memory current;
 - guest cgroup memory peak if available;
 - process count;
@@ -96,6 +101,16 @@ does not exist, mark the result `blocked`.
 | service DNS | lookup/connect latency |
 | port publish | localhost reachability and release behavior |
 | cleanup | stop/delete/release behavior |
+| project storage create/attach/mount | persistent project-store setup cost |
+| agent cold start | guest-side control-plane startup cost |
+| agent reconnect | persistent session recovery cost |
+| state recovery | stale service/job/port/volume reconciliation |
+| host exec vs agent healthcheck | healthcheck overhead comparison |
+| host log calls vs agent stream | log-stream overhead comparison |
+| service status via host vs agent | status latency and correctness |
+| volume registry lookup | volume mapping and ownership overhead |
+| port registry reconcile | port conflict/release proof |
+| warm service recreate | changed-service loop cost |
 
 ## Baselines
 
@@ -109,6 +124,23 @@ Apple `container` CLI may be used as:
 - simple workload reference;
 - negative-control comparison;
 - upstream reproduction helper.
+
+`Mcrich23/Container-Compose` should be added as an external comparison target,
+not an implementation target. Its purpose is to show whether an existing Apple
+`container` CLI/API Compose bridge inherits the same performance and
+compatibility limits seen in direct Apple `container` measurements.
+
+Benchmark targets:
+
+| Target | Purpose |
+| --- | --- |
+| Docker Compose | compatibility and performance reference |
+| OrbStack | high-performance proprietary reference if available |
+| Colima | open-source Docker-compatible reference if available |
+| Apple `container` CLI direct | per-container Apple runtime baseline |
+| `Mcrich23/container-compose` | existing Apple Container Compose bridge baseline |
+| current LinuxPod cold | current adapter behavior |
+| future LinuxPod warm | target architecture |
 
 LinuxPod results should be judged primarily against Docker/OrbStack-class
 Compose behavior for local development, not only against Apple `container` CLI.

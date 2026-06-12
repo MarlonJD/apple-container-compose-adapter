@@ -26,6 +26,7 @@ The Swift scaffold currently defines:
 - `LocalDevRoute`
 - `LocalDevNetwork`
 - `LocalDevBuildSpec`
+- `LocalDevResourcePolicy`
 
 `LocalDevProject.runtimePlan()` bridges the scaffold into the existing
 `RuntimePlan` so current dry-run and LinuxPod planning tests can exercise the
@@ -60,6 +61,7 @@ same execution boundary.
 - internal DNS aliases;
 - dependency conditions;
 - healthcheck;
+- resource policy intent;
 - restart policy;
 - profiles.
 
@@ -80,6 +82,7 @@ to `ServicePlan`.
 - mounts;
 - dependencies;
 - completion policy;
+- resource policy intent;
 - profiles.
 
 The current bridge maps jobs to `ServicePlan(kind: .oneOffJob)` and adds a
@@ -131,6 +134,18 @@ intent such as:
 The first implementation may only preserve this intent. Runtime execution
 should not claim ingress support until a local proxy or equivalent route layer
 is implemented and tested.
+
+## Resource Policies
+
+`LocalDevResourcePolicy` preserves local resource intent:
+
+- CPU limit;
+- memory limit bytes;
+- disk limit bytes.
+
+The first runtime planner may preserve this intent only. It must not claim
+Docker-compatible resource behavior until LinuxPod enforcement and diagnostics
+are tested.
 
 ## Build Specs
 

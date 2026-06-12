@@ -72,6 +72,107 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(project.adapterOwnedName(prefix: "cca-linuxpod-"), "cca-linuxpod-my-api-stack")
     }
 
+    func testAppleNativePlannerPreservesCurrentRuntimePlanShape() throws {
+        let project = LocalDevProject(
+            id: "demo-stack",
+            name: "Demo Stack",
+            services: [
+                LocalDevService(
+                    name: "api",
+                    image: "mirror.gcr.io/library/python:3.12-alpine",
+                    command: ["python", "app.py"],
+                    entrypoint: ["/bin/sh", "-ec"],
+                    environment: ["API_TOKEN": "secret-value"],
+                    mounts: [
+                        LocalDevMount(kind: .namedVolume, source: "api-cache", target: "/cache")
+                    ],
+                    ports: [
+                        LocalDevPort(hostIP: "127.0.0.1", hostPort: 18080, containerPort: 8080)
+                    ],
+                    dependencies: [
+                        LocalDevDependency(target: "migrate", condition: .serviceCompletedSuccessfully)
+                    ],
+                    healthcheck: LocalDevHealthcheck(test: ["python", "-c", "print('ready')"], timeoutSeconds: 7)
+                )
+            ],
+            jobs: [
+                LocalDevJob(
+                    name: "migrate",
+                    image: "mirror.gcr.io/library/python:3.12-alpine",
+                    command: ["python", "migrate.py"],
+                    mounts: [
+                        LocalDevMount(kind: .namedVolume, source: "api-cache", target: "/cache")
+                    ]
+                )
+            ],
+            volumes: [
+                LocalDevVolume(name: "api-cache")
+            ]
+        )
+
+        let result = AppleNativePlanner().plan(project)
+
+        XCTAssertEqual(result.runtimePlan.project.rawValue, "Demo Stack")
+        XCTAssertEqual(result.runtimePlan.volumes, [VolumePlan(name: "api-cache")])
+        XCTAssertEqual(result.runtimePlan.services.map(\.name), ["api", "migrate"])
+        XCTAssertEqual(result.runtimePlan.services.map(\.kind), [.service, .oneOffJob])
+        XCTAssertEqual(result.runtimePlan.services[0].command, ["/bin/sh", "-ec", "python", "app.py"])
+        XCTAssertEqual(result.runtimePlan.services[0].ports, [PortMapping(hostPort: 18080, containerPort: 8080)])
+        XCTAssertFalse(result.runtimePlan.hasBlockingDiagnostics)
+    }
+
+    func testAppleNativePlannerReportsCompatibilityDiagnosticsForPreservedIntent() {
+        let project = LocalDevProject(
+            id: "compat",
+            name: "Compat",
+            services: [
+                LocalDevService(
+                    name: "api",
+                    image: "mirror.gcr.io/library/python:3.12-alpine",
+                    envFiles: [".env"],
+                    aliases: ["api.local"],
+                    restartPolicy: .always
+                )
+            ],
+            jobs: [
+                LocalDevJob(
+                    name: "seed",
+                    image: "mirror.gcr.io/library/python:3.12-alpine",
+                    completionPolicy: .allowFailure
+                )
+            ],
+            networks: [
+                LocalDevNetwork(name: "default", aliases: ["api"])
+            ],
+            routes: [
+                LocalDevRoute(name: "api", host: "api.local", targetService: "api", targetPort: 8080)
+            ],
+            secrets: [
+                LocalDevSecret(name: "api-token", environmentKey: "API_TOKEN")
+            ],
+            configs: [
+                LocalDevConfig(name: "api-config", environmentKey: "APP_CONFIG")
+            ]
+        )
+
+        let result = AppleNativePlanner().plan(project)
+        let entries = Dictionary(uniqueKeysWithValues: result.support.entries.map { ($0.feature, $0.status) })
+        let codes = Set(result.diagnostics.map(\.code))
+
+        XCTAssertEqual(entries["env files"], .unsupported)
+        XCTAssertEqual(entries["routes"], .preservedIntent)
+        XCTAssertEqual(entries["network aliases"], .preservedIntent)
+        XCTAssertEqual(entries["job allow-failure policy"], .unsupported)
+        XCTAssertTrue(codes.contains("unsupported-apple-native-env-file"))
+        XCTAssertTrue(codes.contains("preserved-apple-native-route-intent"))
+        XCTAssertTrue(codes.contains("preserved-apple-native-secret-intent"))
+        XCTAssertTrue(codes.contains("preserved-apple-native-config-intent"))
+        XCTAssertTrue(codes.contains("preserved-apple-native-network-intent"))
+        XCTAssertTrue(codes.contains("preserved-apple-native-restart-policy"))
+        XCTAssertTrue(codes.contains("unsupported-apple-native-job-allow-failure"))
+        XCTAssertTrue(result.runtimePlan.hasBlockingDiagnostics)
+    }
+
     func testLocalDevProjectNormalizesServicesJobsAndNamedVolumesToRuntimePlan() throws {
         let project = LocalDevProject(
             id: "demo-stack",
@@ -87,7 +188,6 @@ final class RuntimeContractTests: XCTestCase {
                         "API_TOKEN": "secret-value",
                         "LOG_LEVEL": "debug"
                     ],
-                    envFiles: [".env"],
                     mounts: [
                         LocalDevMount(kind: .bind, source: ".", target: "/workspace", readOnly: true),
                         LocalDevMount(kind: .namedVolume, source: "api-cache", target: "/cache")
@@ -95,7 +195,6 @@ final class RuntimeContractTests: XCTestCase {
                     ports: [
                         LocalDevPort(name: "http", hostIP: "127.0.0.1", hostPort: 18080, containerPort: 8080)
                     ],
-                    aliases: ["api.local"],
                     dependencies: [
                         LocalDevDependency(target: "migrate", condition: .serviceCompletedSuccessfully)
                     ],
@@ -128,18 +227,6 @@ final class RuntimeContractTests: XCTestCase {
             ],
             volumes: [
                 LocalDevVolume(name: "api-cache", kind: .named, preserveByDefault: true)
-            ],
-            networks: [
-                LocalDevNetwork(name: "default", aliases: ["api", "migrate"])
-            ],
-            routes: [
-                LocalDevRoute(name: "api", host: "api.local", pathPrefix: "/", targetService: "api", targetPort: 8080)
-            ],
-            secrets: [
-                LocalDevSecret(name: "api-token", environmentKey: "API_TOKEN")
-            ],
-            configs: [
-                LocalDevConfig(name: "api-config", environmentKey: "APP_CONFIG")
             ],
             profiles: ["dev"]
         )
@@ -233,6 +320,63 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(project.diagnostics, [])
     }
 
+    func testLocalDevResourcePolicyRoundTripsThroughServicesAndJobs() throws {
+        let resources = LocalDevResourcePolicy(
+            cpuLimit: "2",
+            memoryLimitBytes: 512 * 1024 * 1024,
+            diskLimitBytes: 2 * 1024 * 1024 * 1024
+        )
+        let project = LocalDevProject(
+            id: "resource-demo",
+            name: "Resource Demo",
+            services: [
+                LocalDevService(
+                    name: "api",
+                    image: "mirror.gcr.io/library/python:3.12-alpine",
+                    resources: resources
+                )
+            ],
+            jobs: [
+                LocalDevJob(
+                    name: "seed",
+                    image: "mirror.gcr.io/library/python:3.12-alpine",
+                    resources: resources
+                )
+            ]
+        )
+
+        let encoded = try JSONEncoder().encode(project)
+        let decoded = try JSONDecoder().decode(LocalDevProject.self, from: encoded)
+
+        XCTAssertEqual(decoded.services.first?.resources, resources)
+        XCTAssertEqual(decoded.jobs.first?.resources, resources)
+    }
+
+    func testProjectRuntimeStoreRequiresAdapterOwnedSentinelBeforeCleanup() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-runtime-store-tests-\(UUID().uuidString)", isDirectory: true)
+        let store = ProjectRuntimeStore(baseDirectory: root)
+        let project = ProjectName("Persistent Demo")
+        let projectDirectory = store.projectDirectory(for: project)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        XCTAssertThrowsError(try store.validateAdapterOwnedProjectDirectory(projectDirectory)) { error in
+            XCTAssertEqual(
+                error as? RuntimeBackendError,
+                .runtimeUnavailable("Refusing cleanup for \(projectDirectory.path) because the adapter-owned sentinel is missing.")
+            )
+        }
+
+        FileManager.default.createFile(atPath: store.projectSentinelURL(for: project).path, contents: Data())
+
+        XCTAssertNoThrow(try store.validateAdapterOwnedProjectDirectory(projectDirectory))
+        XCTAssertEqual(store.projectStorageURL(for: project).lastPathComponent, "project-storage.ext4")
+        XCTAssertTrue(store.requiredProjectSubdirectories(for: project).map(\.lastPathComponent).contains("ports"))
+    }
+
     func testRuntimeLogCaptureSummarizesStdoutAndStderrForEvidence() {
         let capture = RuntimeLogCapture()
 
@@ -309,6 +453,7 @@ final class RuntimeContractTests: XCTestCase {
             iteration: 1,
             environment: BenchmarkRunMetadata(
                 runtime: .linuxpod,
+                targetName: "future LinuxPod warm",
                 runtimeVersion: "apple/containerization LinuxPod",
                 containerizationVersion: "0.26.5",
                 appleContainerCLIVersion: "1.0.0",
@@ -366,6 +511,8 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(measured.schemaVersion, Phase6BenchmarkSchema.version)
         XCTAssertEqual(measured.recordType, Phase6BenchmarkSchema.iterationRecordType)
         XCTAssertEqual(measured.hostPhysicalMemoryStatus, .blocked)
+        XCTAssertEqual(measured.environment?.targetName, "future LinuxPod warm")
+        XCTAssertEqual(measured.environment?.coldOrWarm, "warm")
         XCTAssertEqual(measured.environment?.lifecycle, .warm)
         XCTAssertEqual(measured.environment?.rootfsCacheStatus, .hit)
         XCTAssertEqual(summary.recordType, Phase6BenchmarkSchema.summaryRecordType)

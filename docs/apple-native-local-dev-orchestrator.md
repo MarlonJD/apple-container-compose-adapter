@@ -22,6 +22,21 @@ Primary runtime research target:
 
 - `apple/containerization` LinuxPod.
 
+Product decision:
+
+- Apple-native local-dev orchestrator.
+- Core IR: `LocalDevProject`.
+- Primary input: Docker Compose.
+- Future input: Kubernetes local-development subset.
+
+Non-goals:
+
+- simple `container-compose` clone;
+- Docker Engine clone;
+- full Kubernetes distribution;
+- Docker-compatible backend;
+- Apple `container` CLI wrapper positioning.
+
 ## Architecture
 
 Compose path:
@@ -89,6 +104,17 @@ that the main implementation path in this first scope.
 Docker Desktop, OrbStack, Colima, Podman, Lima, and Rancher Desktop are
 comparison baselines and optimization references only. They are not
 implementation targets and should not be added as Docker-compatible backends.
+
+`Mcrich23/Container-Compose` is also a comparison and compatibility reference,
+not an implementation target. Existing Apple Container Compose wrappers map
+Compose intent onto Apple `container` CLI/API behavior; this project studies
+whether a persistent LinuxPod project runtime can solve the lower-level
+runtime, storage, DNS, job, event, and recovery problems for backend-shaped
+local-development workloads.
+
+Microsoft WSL container is an optimization reference only. Its useful lesson is
+the need for persistent session/storage/event/recovery machinery behind a
+native host UX. Do not add dockerd, containerd, or WSL as a backend.
 
 ## Current Implementation Boundary
 

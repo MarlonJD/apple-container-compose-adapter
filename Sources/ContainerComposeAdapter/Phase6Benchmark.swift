@@ -23,6 +23,8 @@ public enum BenchmarkCacheStatus: String, Codable, Equatable, Sendable {
 
 public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
     public let runtime: RuntimeKind
+    public let targetName: String
+    public let coldOrWarm: String
     public let runtimeVersion: String
     public let containerizationVersion: String?
     public let appleContainerCLIVersion: String?
@@ -35,8 +37,26 @@ public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
     public let initfsCacheStatus: BenchmarkCacheStatus
     public let volumeExistedBeforeRun: Bool
 
+    private enum CodingKeys: String, CodingKey {
+        case runtime
+        case targetName = "target_name"
+        case coldOrWarm = "cold_or_warm"
+        case runtimeVersion
+        case containerizationVersion
+        case appleContainerCLIVersion
+        case macOSVersion
+        case hostArchitecture
+        case lifecycle
+        case projectRuntimeExistedBeforeRun
+        case imageCacheStatus
+        case rootfsCacheStatus
+        case initfsCacheStatus
+        case volumeExistedBeforeRun
+    }
+
     public init(
         runtime: RuntimeKind,
+        targetName: String? = nil,
         runtimeVersion: String,
         containerizationVersion: String? = nil,
         appleContainerCLIVersion: String? = nil,
@@ -50,6 +70,8 @@ public struct BenchmarkRunMetadata: Codable, Equatable, Sendable {
         volumeExistedBeforeRun: Bool
     ) {
         self.runtime = runtime
+        self.targetName = targetName ?? runtime.rawValue
+        self.coldOrWarm = lifecycle.rawValue
         self.runtimeVersion = runtimeVersion
         self.containerizationVersion = containerizationVersion
         self.appleContainerCLIVersion = appleContainerCLIVersion
