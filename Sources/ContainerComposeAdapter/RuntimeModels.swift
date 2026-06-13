@@ -270,8 +270,13 @@ public struct PlannedAction: Codable, Equatable, Sendable {
 
 public struct RuntimeOptions: Codable, Equatable, Sendable {
     public let includeVolumes: Bool
+    public let rootfsMaterializationStrategyOverride: RootfsMaterializationStrategy?
 
-    public init(includeVolumes: Bool = false) {
+    public init(
+        includeVolumes: Bool = false,
+        rootfsMaterializationStrategyOverride: RootfsMaterializationStrategy? = nil
+    ) {
         self.includeVolumes = includeVolumes
+        self.rootfsMaterializationStrategyOverride = rootfsMaterializationStrategyOverride
     }
 }

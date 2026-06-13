@@ -32,6 +32,7 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
     public var stage9BHotplugProbe = false
     public var stage9DHotplugProviderProbe = false
     public var stage10ARootfsMaterializationProbe = false
+    public var stage10BRuntimeComparison = false
     public var rootfsMaterializationStrategy: RootfsMaterializationStrategy = .fullCopy
 
     public var effectiveSeedImageStore: String? {
@@ -167,6 +168,8 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
                 options.stage9DHotplugProviderProbe = true
             case "--stage10a-rootfs-materialization-probe":
                 options.stage10ARootfsMaterializationProbe = true
+            case "--stage10b-runtime-comparison":
+                options.stage10BRuntimeComparison = true
             case "--rootfs-materialization-strategy":
                 index += 1
                 guard index < args.count,
@@ -209,10 +212,17 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
         let enabledDiagnosticProbeCount = [
             options.stage9BHotplugProbe,
             options.stage9DHotplugProviderProbe,
-            options.stage10ARootfsMaterializationProbe
+            options.stage10ARootfsMaterializationProbe,
+            options.stage10BRuntimeComparison
         ].filter { $0 }.count
         if enabledDiagnosticProbeCount > 1 {
-            throw Phase6BenchmarkOptionsError.usage("Choose only one diagnostic probe: --stage9b-hotplug-probe, --stage9d-hotplug-provider-probe, or --stage10a-rootfs-materialization-probe")
+            throw Phase6BenchmarkOptionsError.usage("Choose only one diagnostic probe: --stage9b-hotplug-probe, --stage9d-hotplug-provider-probe, --stage10a-rootfs-materialization-probe, or --stage10b-runtime-comparison")
+        }
+        if options.stage10BRuntimeComparison
+            && ![.fullCopy, .auto, .clonefile].contains(options.rootfsMaterializationStrategy) {
+            throw Phase6BenchmarkOptionsError.usage(
+                "--stage10b-runtime-comparison supports only the default auto clone candidate or --rootfs-materialization-strategy auto|clonefile"
+            )
         }
         return options
     }
@@ -223,6 +233,7 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
         Diagnostic: add --stage9b-hotplug-probe to run the LinuxPod addContainer lifecycle probe instead of the Phase 6 benchmark loop.
         Diagnostic: add --stage9d-hotplug-provider-probe to run the custom HotplugProvider feasibility probe instead of the Phase 6 benchmark loop.
         Diagnostic: add --stage10a-rootfs-materialization-probe [--rootfs-materialization-strategy fullCopy|fileManagerCopy|apfsClone|clonefile|copyfileClone|auto] to compare rootfs materialization strategies instead of the Phase 6 benchmark loop.
+        Diagnostic: add --stage10b-runtime-comparison [--rootfs-materialization-strategy auto|clonefile] to compare fullCopy against a clone candidate in the real backend-shaped LinuxPod runtime without changing defaults.
         """
     }
 

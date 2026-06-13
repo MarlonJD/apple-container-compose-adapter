@@ -1663,6 +1663,9 @@ public struct Phase6BenchmarkIterationRecord: Codable, Equatable, Sendable {
     public let actionCount: Int
     public let cleanupStateDirectoryExistsAfterCleanup: Bool
     public let healthcheckAttempts: Int?
+    public let jobAttempts: Int?
+    public let successfulJobCount: Int?
+    public let jobExitCodes: [String]?
     public let dataFootprintBytes: UInt64?
     public let cleanupResult: String
     public let failure: String?
@@ -1685,6 +1688,9 @@ public struct Phase6BenchmarkIterationRecord: Codable, Equatable, Sendable {
         actionCount: Int,
         cleanupStateDirectoryExistsAfterCleanup: Bool,
         healthcheckAttempts: Int? = nil,
+        jobAttempts: Int? = nil,
+        successfulJobCount: Int? = nil,
+        jobExitCodes: [String]? = nil,
         dataFootprintBytes: UInt64? = nil,
         cleanupResult: String? = nil,
         failure: String?,
@@ -1708,6 +1714,9 @@ public struct Phase6BenchmarkIterationRecord: Codable, Equatable, Sendable {
         self.actionCount = actionCount
         self.cleanupStateDirectoryExistsAfterCleanup = cleanupStateDirectoryExistsAfterCleanup
         self.healthcheckAttempts = healthcheckAttempts
+        self.jobAttempts = jobAttempts
+        self.successfulJobCount = successfulJobCount
+        self.jobExitCodes = jobExitCodes
         self.dataFootprintBytes = dataFootprintBytes
         self.cleanupResult = cleanupResult ?? (cleanupStateDirectoryExistsAfterCleanup ? "leftovers" : "clean")
         self.failure = failure
@@ -1747,6 +1756,8 @@ public struct Phase6BenchmarkSummaryRecord: Codable, Equatable, Sendable {
     public let containerStartDurationP50Seconds: Double?
     public let healthcheckDurationP50Seconds: Double?
     public let healthcheckAttemptsP50: Int?
+    public let jobAttemptsP50: Int?
+    public let successfulJobCountP50: Int?
     public let lifecycleMode: String?
     public let lifecycleModeID: String?
     public let statusTimingMeaning: String
@@ -1797,6 +1808,8 @@ public struct Phase6BenchmarkSummaryRecord: Codable, Equatable, Sendable {
         self.containerStartDurationP50Seconds = p50(measured.compactMap(\.durationsSeconds.containerStart))
         self.healthcheckDurationP50Seconds = p50(measured.compactMap(\.durationsSeconds.healthcheck))
         self.healthcheckAttemptsP50 = p50(measured.compactMap(\.healthcheckAttempts))
+        self.jobAttemptsP50 = p50(measured.compactMap(\.jobAttempts))
+        self.successfulJobCountP50 = p50(measured.compactMap(\.successfulJobCount))
         self.lifecycleMode = self.environment?.lifecycleMode
         self.lifecycleModeID = self.environment?.lifecycleModeID
         self.statusTimingMeaning = "control-plane-local-state"
@@ -1811,6 +1824,226 @@ public struct Phase6BenchmarkSummaryRecord: Codable, Equatable, Sendable {
         self.processRSSP50Bytes = p50(measured.compactMap { $0.guest?.processRSSBytes })
         self.dataFootprintP50Bytes = p50(measured.compactMap(\.dataFootprintBytes))
         self.cleanupResult = measured.first?.cleanupResult
+    }
+}
+
+public enum Stage10BRuntimeComparisonSchema {
+    public static let version = "container-compose-adapter/linuxpod-stage10b-runtime-comparison/v1"
+    public static let recordType = "stage10bRuntimeComparison"
+}
+
+public enum Stage10BDecisionRecommendation: String, Codable, Equatable, Sendable {
+    case recommendStage10CRepeatedWarmBenchmark
+    case keepProductizationPausedCloseResearchCheckpoint
+}
+
+public struct Stage10BStrategyRuntimeSummary: Codable, Equatable, Sendable {
+    public let requestedStrategy: RootfsMaterializationStrategy
+    public let observedStrategies: [RootfsMaterializationStrategy]
+    public let measured: Bool
+    public let upDurationSeconds: Double?
+    public let readinessDurationSeconds: Double?
+    public let rootfsPrepDurationSeconds: Double?
+    public let projectRootfsMaterializeDurationSeconds: Double?
+    public let containerRootfsMaterializeDurationSeconds: Double?
+    public let blockReadBytes: UInt64?
+    public let blockWriteBytes: UInt64?
+    public let healthcheckAttempts: Int?
+    public let jobAttempts: Int?
+    public let successfulJobCount: Int?
+    public let volumeExistedBeforeRun: Bool?
+    public let volumeCreateOrReuseDurationSeconds: Double?
+    public let dataFootprintBytes: UInt64?
+    public let cleanupResult: String
+    public let cleanupStateDirectoryExistsAfterCleanup: Bool
+    public let hostPortProbeStatus: String
+    public let loadWindowStatus: String
+    public let rootfsWorkAvoided: EvidenceTruthValue
+    public let failure: String?
+
+    public init(
+        requestedStrategy: RootfsMaterializationStrategy,
+        observedStrategies: [RootfsMaterializationStrategy],
+        measured: Bool,
+        upDurationSeconds: Double?,
+        readinessDurationSeconds: Double?,
+        rootfsPrepDurationSeconds: Double?,
+        projectRootfsMaterializeDurationSeconds: Double?,
+        containerRootfsMaterializeDurationSeconds: Double?,
+        blockReadBytes: UInt64?,
+        blockWriteBytes: UInt64?,
+        healthcheckAttempts: Int?,
+        jobAttempts: Int?,
+        successfulJobCount: Int?,
+        volumeExistedBeforeRun: Bool?,
+        volumeCreateOrReuseDurationSeconds: Double?,
+        dataFootprintBytes: UInt64?,
+        cleanupResult: String,
+        cleanupStateDirectoryExistsAfterCleanup: Bool,
+        hostPortProbeStatus: String,
+        loadWindowStatus: String,
+        rootfsWorkAvoided: EvidenceTruthValue,
+        failure: String?
+    ) {
+        self.requestedStrategy = requestedStrategy
+        self.observedStrategies = observedStrategies
+        self.measured = measured
+        self.upDurationSeconds = upDurationSeconds
+        self.readinessDurationSeconds = readinessDurationSeconds
+        self.rootfsPrepDurationSeconds = rootfsPrepDurationSeconds
+        self.projectRootfsMaterializeDurationSeconds = projectRootfsMaterializeDurationSeconds
+        self.containerRootfsMaterializeDurationSeconds = containerRootfsMaterializeDurationSeconds
+        self.blockReadBytes = blockReadBytes
+        self.blockWriteBytes = blockWriteBytes
+        self.healthcheckAttempts = healthcheckAttempts
+        self.jobAttempts = jobAttempts
+        self.successfulJobCount = successfulJobCount
+        self.volumeExistedBeforeRun = volumeExistedBeforeRun
+        self.volumeCreateOrReuseDurationSeconds = volumeCreateOrReuseDurationSeconds
+        self.dataFootprintBytes = dataFootprintBytes
+        self.cleanupResult = cleanupResult
+        self.cleanupStateDirectoryExistsAfterCleanup = cleanupStateDirectoryExistsAfterCleanup
+        self.hostPortProbeStatus = hostPortProbeStatus
+        self.loadWindowStatus = loadWindowStatus
+        self.rootfsWorkAvoided = rootfsWorkAvoided
+        self.failure = failure
+    }
+}
+
+public struct Stage10BRuntimeComparisonRecord: Codable, Equatable, Sendable {
+    public let schemaVersion: String
+    public let recordType: String
+    public let timestamp: String
+    public let fullCopy: Stage10BStrategyRuntimeSummary
+    public let cloneCandidate: Stage10BStrategyRuntimeSummary
+    public let materialImprovementThresholdPercent: Double
+    public let upImprovementPercent: Double?
+    public let readinessImprovementPercent: Double?
+    public let backendFixtureSucceeded: Bool
+    public let cleanupClean: Bool
+    public let dockerOrOrbStackGateMeasured: Bool
+    public let dockerOrOrbStackGatePassed: Bool?
+    public let recommendation: Stage10BDecisionRecommendation
+
+    public init(
+        timestamp: String,
+        fullCopy: Stage10BStrategyRuntimeSummary,
+        cloneCandidate: Stage10BStrategyRuntimeSummary,
+        materialImprovementThresholdPercent: Double = 20,
+        dockerOrOrbStackGateMeasured: Bool = false,
+        dockerOrOrbStackGatePassed: Bool? = nil
+    ) {
+        self.schemaVersion = Stage10BRuntimeComparisonSchema.version
+        self.recordType = Stage10BRuntimeComparisonSchema.recordType
+        self.timestamp = timestamp
+        self.fullCopy = fullCopy
+        self.cloneCandidate = cloneCandidate
+        self.materialImprovementThresholdPercent = materialImprovementThresholdPercent
+        self.upImprovementPercent = Self.improvementPercent(
+            baseline: fullCopy.upDurationSeconds,
+            candidate: cloneCandidate.upDurationSeconds
+        )
+        self.readinessImprovementPercent = Self.improvementPercent(
+            baseline: fullCopy.readinessDurationSeconds,
+            candidate: cloneCandidate.readinessDurationSeconds
+        )
+        let backendFixtureSucceeded = cloneCandidate.measured
+            && cloneCandidate.failure == nil
+            && (cloneCandidate.jobAttempts ?? 0) == (cloneCandidate.successfulJobCount ?? -1)
+            && (cloneCandidate.healthcheckAttempts ?? 0) > 0
+        let cleanupClean = fullCopy.cleanupResult == "clean"
+            && cloneCandidate.cleanupResult == "clean"
+            && !fullCopy.cleanupStateDirectoryExistsAfterCleanup
+            && !cloneCandidate.cleanupStateDirectoryExistsAfterCleanup
+        self.backendFixtureSucceeded = backendFixtureSucceeded
+        self.cleanupClean = cleanupClean
+        self.dockerOrOrbStackGateMeasured = dockerOrOrbStackGateMeasured
+        self.dockerOrOrbStackGatePassed = dockerOrOrbStackGatePassed
+        let upImproved = (self.upImprovementPercent ?? 0) >= materialImprovementThresholdPercent
+        let readinessNotWorse = (self.readinessImprovementPercent ?? 0) >= -10
+        let cloneWorkAvoided = cloneCandidate.rootfsWorkAvoided == .true
+            || cloneCandidate.observedStrategies.contains(where: \.isCloneStrategy)
+        if upImproved && readinessNotWorse && backendFixtureSucceeded && cleanupClean && cloneWorkAvoided {
+            self.recommendation = .recommendStage10CRepeatedWarmBenchmark
+        } else {
+            self.recommendation = .keepProductizationPausedCloseResearchCheckpoint
+        }
+    }
+
+    private static func improvementPercent(baseline: Double?, candidate: Double?) -> Double? {
+        guard let baseline, let candidate, baseline > 0 else {
+            return nil
+        }
+        return ((baseline - candidate) / baseline) * 100
+    }
+}
+
+public struct Stage10BRuntimeComparisonEvidenceValidator: Sendable {
+    public init() {}
+
+    public func validate(records: [Phase6BenchmarkIterationRecord], comparison: Stage10BRuntimeComparisonRecord?) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        if records.isEmpty {
+            diagnostics.append(blocking("stage10b-evidence-empty", "Stage 10B evidence must include iteration records."))
+        }
+        for record in records where record.status == .measured {
+            if record.durationsSeconds.up == nil {
+                diagnostics.append(blocking("stage10b-up-duration-missing", "Stage 10B measured records must include up/readiness duration."))
+            }
+            if record.durationsSeconds.rootfsPrep == nil || record.rootfsPreparation?.isEmpty != false {
+                diagnostics.append(blocking("stage10b-rootfs-breakdown-missing", "Stage 10B measured records must include rootfs prep and materialization breakdowns."))
+            }
+            if record.durationsSeconds.healthcheck == nil || record.healthcheckAttempts == nil {
+                diagnostics.append(blocking("stage10b-healthcheck-missing", "Stage 10B measured records must include healthcheck duration and attempts."))
+            }
+            if record.jobAttempts == nil || record.successfulJobCount == nil {
+                diagnostics.append(blocking("stage10b-job-metrics-missing", "Stage 10B measured records must include job attempts and successful job count."))
+            }
+            if record.guest?.blockReadBytes == nil || record.guest?.blockWriteBytes == nil {
+                diagnostics.append(blocking("stage10b-block-io-missing", "Stage 10B measured records must include whole-run block read/write metrics."))
+            }
+            if record.dataFootprintBytes == nil {
+                diagnostics.append(blocking("stage10b-volume-footprint-missing", "Stage 10B measured records must include volume/data footprint evidence."))
+            }
+            if record.cleanupResult != "clean" || record.cleanupStateDirectoryExistsAfterCleanup {
+                diagnostics.append(blocking("stage10b-cleanup-leftovers", "Stage 10B measured records must prove clean adapter-owned cleanup."))
+            }
+            if record.environment?.hostPortProbeStatus != "notMeasured"
+                || record.environment?.loadWindowStatus != "notMeasured" {
+                diagnostics.append(blocking("stage10b-not-measured-fields-missing", "Stage 10B host-port and load-window gaps must remain explicitly notMeasured."))
+            }
+            if record.blockIOAttribution != "wholeRunOnly" || record.rootfsBlockIOAttribution != "notMeasured" {
+                diagnostics.append(blocking("stage10b-block-io-attribution-missing", "Stage 10B must label block I/O as wholeRunOnly and rootfs block I/O as notMeasured when phase-level I/O is unavailable."))
+            }
+        }
+        for record in records where record.status == .failed {
+            if record.cleanupResult != "clean" || record.cleanupStateDirectoryExistsAfterCleanup {
+                diagnostics.append(blocking("stage10b-failed-run-cleanup-leftovers", "Failed Stage 10B runs must still prove clean adapter-owned cleanup."))
+            }
+            if record.failure?.isEmpty != false {
+                diagnostics.append(blocking("stage10b-failed-run-missing-error", "Failed Stage 10B runs must include the runtime failure."))
+            }
+        }
+        guard let comparison else {
+            diagnostics.append(blocking("stage10b-comparison-missing", "Stage 10B evidence must include a runtime comparison record."))
+            return diagnostics
+        }
+        if comparison.dockerOrOrbStackGatePassed == true && !comparison.dockerOrOrbStackGateMeasured {
+            diagnostics.append(blocking("stage10b-docker-orbstack-gate-unmeasured", "Stage 10B must not pass the Docker/OrbStack gate unless it was directly measured."))
+        }
+        if comparison.fullCopy.requestedStrategy != .fullCopy {
+            diagnostics.append(blocking("stage10b-fullcopy-baseline-missing", "Stage 10B comparison must include a fullCopy baseline."))
+        }
+        if comparison.cloneCandidate.requestedStrategy == .fullCopy {
+            diagnostics.append(blocking("stage10b-clone-candidate-missing", "Stage 10B comparison must include an auto or clonefile candidate."))
+        }
+        if comparison.fullCopy.hostPortProbeStatus != "notMeasured"
+            || comparison.cloneCandidate.hostPortProbeStatus != "notMeasured"
+            || comparison.fullCopy.loadWindowStatus != "notMeasured"
+            || comparison.cloneCandidate.loadWindowStatus != "notMeasured" {
+            diagnostics.append(blocking("stage10b-not-measured-fields-missing", "Stage 10B host-port and load-window gaps must remain explicitly notMeasured."))
+        }
+        return diagnostics
     }
 }
 

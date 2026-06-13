@@ -100,11 +100,48 @@ The current SwiftPM implementation is intentionally small and gate-driven:
   baseline only. It is not a backend implementation path.
 
 The LinuxPod path currently uses the pinned
-`apple/containerization` package version `0.26.5`.
+`apple/containerization` package version `0.33.4`.
 
-This repository has not implemented persistent LinuxPod hotplug, rootfs-cache
-reuse, writable-layer support, Kubernetes input parsing, or full Compose
-parsing yet. Those are planned or research items, not current behavior.
+This repository has not implemented product-ready persistent LinuxPod hotplug,
+writable-layer support, or full Compose parsing yet. Those are planned or
+research items, not current behavior.
+
+## Research Status
+
+As of 2026-06-13, productization is paused and the Apple-native runtime work is
+preserved as a research checkpoint.
+
+The evidence is mixed. Apple `container` remains promising for simple
+workloads, and LinuxPod can run the backend-shaped fixture, but cold/fresh
+backend-shaped runtime remains slow. Image-store seeding helps substantially but
+does not solve rootfs/initfs/volume/pod lifecycle cost by itself. Rootfs cache
+hits are not enough while the runtime still performs full rootfs materialization
+copies into project and per-container ext4 images. Warm ext4 named volumes help
+block-write behavior.
+
+LinuxPod hotplug is not a product path here: the default VZ provider is missing,
+a diagnostic custom provider can receive the call, public ext4/block rootfs
+hotplug still does not complete, and the second container does not start.
+
+Stage 10A clonefile/COW diagnostics are promising because `clonefile` was
+strongly verified, byte-for-byte rootfs copy work was avoided, and cleanup was
+clean. That remains diagnostic evidence only: `clonefile` is not the default,
+the evidence records `productReady=false`, and no Docker/OrbStack parity,
+Docker/OrbStack gate, host RAM, or energy savings claim is made.
+
+Stage 10B was attempted as a guarded final decision experiment comparing
+full-copy rootfs materialization with the `auto`/`clonefile` candidate in the
+real backend-shaped LinuxPod runtime. The comparison stalled during the
+full-copy leg before any valid Stage 10B JSONL comparison evidence was
+produced. Cleanup was checked clean, but `up`/readiness, rootfs preparation,
+project/container materialization, block I/O, healthcheck, job, and volume
+comparison metrics were not measured as a valid fullCopy versus clonefile
+record.
+
+Do not recommend Stage 10C repeated warm benchmarking from the current
+evidence. Productization remains paused, `clonefile` remains non-default, and
+no Docker/OrbStack gate, Docker/OrbStack parity, host RAM, or energy savings
+claim is made.
 
 ## Design Docs
 

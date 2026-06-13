@@ -25,6 +25,12 @@ struct Phase6BenchmarkHarness {
             )
         }
         let approval = RuntimeApproval(approved: true, token: options.approvalToken)
+
+        if options.stage10BRuntimeComparison {
+            try await runStage10BRuntimeComparison(options, approval: approval)
+            return
+        }
+
         let executor = ContainerizationLinuxPodRuntimeExecutor()
         let backend = LinuxPodBackend(runtimeExecutor: executor)
         var records: [Phase6BenchmarkIterationRecord] = []
@@ -191,6 +197,119 @@ struct Phase6BenchmarkHarness {
             )
         }
         print("stage10a-rootfs-materialization-probe: completed \(records.count) record(s); evidence at \(options.evidencePath ?? "")")
+    }
+
+    private static func runStage10BRuntimeComparison(
+        _ options: Phase6BenchmarkOptions,
+        approval: RuntimeApproval
+    ) async throws {
+        let candidate = options.rootfsMaterializationStrategy.isCloneStrategy
+            ? options.rootfsMaterializationStrategy
+            : RootfsMaterializationStrategy.auto
+        let strategies: [RootfsMaterializationStrategy] = [.fullCopy, candidate]
+        var recordsByStrategy: [RootfsMaterializationStrategy: [Phase6BenchmarkIterationRecord]] = [:]
+        var summariesByStrategy: [RootfsMaterializationStrategy: Phase6BenchmarkSummaryRecord] = [:]
+
+        for strategy in strategies {
+            var strategyOptions = options
+            strategyOptions.stage10BRuntimeComparison = true
+            strategyOptions.rootfsMaterializationStrategy = strategy
+            strategyOptions.runLabel = "\(options.runLabel)-\(stage10BRunLabelSuffix(strategy))"
+
+            let executor = ContainerizationLinuxPodRuntimeExecutor()
+            let backend = LinuxPodBackend(runtimeExecutor: executor)
+            var strategyRecords: [Phase6BenchmarkIterationRecord] = []
+
+            for iteration in 1...strategyOptions.iterations {
+                let projectName = strategyOptions.projectName(forIteration: iteration)
+                let plan = try makePlan(options: strategyOptions, projectName: projectName)
+                let projectResource = backend.stateStore.projectName(for: plan.project)
+                let projectDirectory = backend.stateStore.projectDirectory(for: plan.project)
+                let cleanupPolicy = strategyOptions.cleanupPolicy(isFinalIteration: iteration == strategyOptions.iterations)
+
+                FileHandle.standardError.write(
+                    Data("stage10b-runtime-comparison: \(strategy.rawValue) iteration \(iteration)/\(strategyOptions.iterations) up\n".utf8)
+                )
+                let record = await runIteration(
+                    iteration: iteration,
+                    options: strategyOptions,
+                    plan: plan,
+                    projectResource: projectResource,
+                    projectDirectory: projectDirectory,
+                    cleanupPolicy: cleanupPolicy,
+                    backend: backend,
+                    executor: executor,
+                    approval: approval
+                )
+                try appendJSONLine(record, path: options.evidencePath)
+                strategyRecords.append(record)
+            }
+
+            let summary = Phase6BenchmarkSummaryRecord(
+                timestamp: iso8601Now(),
+                projectPrefix: strategyOptions.projectPrefix,
+                runLabel: strategyOptions.runLabel,
+                requestedIterations: strategyOptions.iterations,
+                records: strategyRecords
+            )
+            try appendJSONLine(summary, path: options.evidencePath)
+            recordsByStrategy[strategy] = strategyRecords
+            summariesByStrategy[strategy] = summary
+        }
+
+        guard let fullCopyRecords = recordsByStrategy[.fullCopy],
+              let fullCopySummary = summariesByStrategy[.fullCopy],
+              let candidateRecords = recordsByStrategy[candidate],
+              let candidateSummary = summariesByStrategy[candidate] else {
+            throw HarnessError.usage("Stage 10B comparison did not produce both fullCopy and clone-candidate records.")
+        }
+        let comparison = Stage10BRuntimeComparisonRecord(
+            timestamp: iso8601Now(),
+            fullCopy: stage10BStrategySummary(
+                requestedStrategy: .fullCopy,
+                records: fullCopyRecords,
+                summary: fullCopySummary
+            ),
+            cloneCandidate: stage10BStrategySummary(
+                requestedStrategy: candidate,
+                records: candidateRecords,
+                summary: candidateSummary
+            )
+        )
+        try appendJSONLine(comparison, path: options.evidencePath)
+        let diagnostics = Stage10BRuntimeComparisonEvidenceValidator()
+            .validate(records: fullCopyRecords + candidateRecords, comparison: comparison)
+        let blocking = diagnostics.filter { $0.severity == DiagnosticSeverity.blocking }
+        guard blocking.isEmpty else {
+            throw HarnessError.usage(
+                "Stage 10B runtime comparison evidence failed validation: \(blocking.map { $0.code }.joined(separator: ", "))"
+            )
+        }
+        print("stage10b-runtime-comparison: completed \(strategies.count) strategy run(s); evidence at \(options.evidencePath ?? "")")
+    }
+
+    private static func stage10BRunLabelSuffix(_ strategy: RootfsMaterializationStrategy) -> String {
+        switch strategy {
+        case .fullCopy:
+            return "fullcopy"
+        case .auto:
+            return "auto"
+        case .clonefile:
+            return "clonefile"
+        case .copyfileClone:
+            return "copyfileclone"
+        case .apfsClone:
+            return "apfsclone"
+        case .fileManagerCopy:
+            return "filemanagercopy"
+        case .unsupported,
+             .unpack,
+             .copy,
+             .clone,
+             .reuse,
+             .unknown:
+            return strategy.rawValue.lowercased()
+        }
     }
 
     // Image-store-seeded fresh-runtime iterations copy a prepared local image
@@ -419,12 +538,17 @@ struct Phase6BenchmarkHarness {
             let up = try await backend.execute(
                 command: .up,
                 plan: plan,
-                options: RuntimeOptions(),
+                options: RuntimeOptions(
+                    rootfsMaterializationStrategyOverride: options.stage10BRuntimeComparison
+                        ? options.rootfsMaterializationStrategy
+                        : nil
+                ),
                 approval: approval
             )
             upDuration = elapsedSeconds(since: upStarted)
             upActionResults = up.actionResults
             actionCount += up.actionResults.count
+            let jobResults = up.actionResults.filter { $0.kind == .runJob }
 
             guest = try await executor.guestStatistics(project: projectResource)
 
@@ -506,6 +630,11 @@ struct Phase6BenchmarkHarness {
                 actionCount: actionCount,
                 cleanupStateDirectoryExistsAfterCleanup: FileManager.default.fileExists(atPath: projectDirectory.path),
                 healthcheckAttempts: up.actionResults.filter { $0.kind == .waitForReadiness }.count,
+                jobAttempts: jobResults.count,
+                successfulJobCount: jobResults.filter { $0.metadata["exitCode"] == "0" }.count,
+                jobExitCodes: jobResults.map { result in
+                    "\(result.resourceName ?? "job"):\(result.metadata["exitCode"] ?? "unknown")"
+                },
                 dataFootprintBytes: dataFootprintBeforeCleanup,
                 cleanupResult: cleanupResult,
                 failure: nil,
@@ -709,6 +838,80 @@ struct Phase6BenchmarkHarness {
             )
         }
         return breakdowns.isEmpty ? nil : breakdowns
+    }
+
+    private static func stage10BStrategySummary(
+        requestedStrategy: RootfsMaterializationStrategy,
+        records: [Phase6BenchmarkIterationRecord],
+        summary: Phase6BenchmarkSummaryRecord
+    ) -> Stage10BStrategyRuntimeSummary {
+        let measured = records.filter { $0.status == .measured }
+        let breakdowns = measured.flatMap { $0.rootfsPreparation ?? [] }
+        let observedStrategies = Array(Set(breakdowns.map(\.rootfsMaterializationStrategy))).sorted {
+            $0.rawValue < $1.rawValue
+        }
+        return Stage10BStrategyRuntimeSummary(
+            requestedStrategy: requestedStrategy,
+            observedStrategies: observedStrategies,
+            measured: summary.measuredIterations > 0 && summary.failureCount == 0,
+            upDurationSeconds: summary.upDurationP50Seconds,
+            readinessDurationSeconds: summary.healthcheckDurationP50Seconds,
+            rootfsPrepDurationSeconds: summary.rootfsPrepDurationP50Seconds,
+            projectRootfsMaterializeDurationSeconds: p50Double(
+                measured.map { stage10BMaterializationDuration($0, actionKind: PlannedActionKind.prepareImageRootfs.rawValue) }
+            ),
+            containerRootfsMaterializeDurationSeconds: p50Double(
+                measured.map { stage10BMaterializationDuration($0, actionKind: PlannedActionKind.addContainer.rawValue) }
+            ),
+            blockReadBytes: summary.blockReadP50Bytes,
+            blockWriteBytes: summary.blockWriteP50Bytes,
+            healthcheckAttempts: summary.healthcheckAttemptsP50,
+            jobAttempts: summary.jobAttemptsP50,
+            successfulJobCount: summary.successfulJobCountP50,
+            volumeExistedBeforeRun: summary.environment?.volumeExistedBeforeRun,
+            volumeCreateOrReuseDurationSeconds: summary.volumeCreateOrReuseDurationP50Seconds,
+            dataFootprintBytes: summary.dataFootprintP50Bytes,
+            cleanupResult: summary.cleanupResult ?? records.last?.cleanupResult ?? "unknown",
+            cleanupStateDirectoryExistsAfterCleanup: records.last?.cleanupStateDirectoryExistsAfterCleanup ?? true,
+            hostPortProbeStatus: summary.hostPortProbeStatus,
+            loadWindowStatus: summary.loadWindowStatus,
+            rootfsWorkAvoided: stage10BRootfsWorkAvoided(breakdowns),
+            failure: records.compactMap(\.failure).first
+        )
+    }
+
+    private static func stage10BMaterializationDuration(
+        _ record: Phase6BenchmarkIterationRecord,
+        actionKind: String
+    ) -> Double? {
+        let values = (record.rootfsPreparation ?? [])
+            .filter { $0.actionKind == actionKind }
+            .compactMap(\.containerRootfsMaterializeDuration)
+        guard !values.isEmpty else {
+            return nil
+        }
+        return values.reduce(0, +)
+    }
+
+    private static func stage10BRootfsWorkAvoided(_ breakdowns: [RootfsPreparationBreakdown]) -> EvidenceTruthValue {
+        guard !breakdowns.isEmpty else {
+            return .unknown
+        }
+        if breakdowns.allSatisfy({ $0.rootfsWorkAvoided == .true }) {
+            return .true
+        }
+        if breakdowns.allSatisfy({ $0.rootfsWorkAvoided == .false }) {
+            return .false
+        }
+        return .unknown
+    }
+
+    private static func p50Double(_ values: [Double?]) -> Double? {
+        let sorted = values.compactMap { $0 }.sorted()
+        guard !sorted.isEmpty else {
+            return nil
+        }
+        return sorted[sorted.count / 2]
     }
 
     private static func hotplugDiagnosticsIfNeeded(

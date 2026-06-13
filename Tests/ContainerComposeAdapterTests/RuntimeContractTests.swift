@@ -1053,6 +1053,172 @@ final class RuntimeContractTests: XCTestCase {
         }
     }
 
+    func testStage10BRuntimeComparisonOptionsStayGuardedAndNonDefault() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--stage10b-runtime-comparison",
+            "--rootfs-materialization-strategy", "clonefile",
+            "--evidence-jsonl", "stage10b.jsonl",
+            "--approval-token", "token",
+            "--project-prefix", "stage10b",
+            "--run-label", "runtime",
+            "--docker-hub-mirror", "mirror.gcr.io/"
+        ])
+
+        XCTAssertTrue(options.stage10BRuntimeComparison)
+        XCTAssertEqual(options.rootfsMaterializationStrategy, .clonefile)
+        XCTAssertFalse(options.stage10ARootfsMaterializationProbe)
+        XCTAssertEqual(options.projectName(forIteration: 1), "stage10b-runtime-001")
+        XCTAssertEqual(RuntimeOptions().rootfsMaterializationStrategyOverride, nil)
+
+        let defaultCandidate = try Phase6BenchmarkOptions.parse([
+            "--stage10b-runtime-comparison",
+            "--evidence-jsonl", "stage10b.jsonl",
+            "--approval-token", "token"
+        ])
+        XCTAssertEqual(defaultCandidate.rootfsMaterializationStrategy, .fullCopy)
+
+        let normal = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "normal.jsonl",
+            "--approval-token", "token"
+        ])
+        XCTAssertFalse(normal.stage10BRuntimeComparison)
+        XCTAssertEqual(normal.rootfsMaterializationStrategy, .fullCopy)
+
+        XCTAssertThrowsError(
+            try Phase6BenchmarkOptions.parse([
+                "--stage10b-runtime-comparison",
+                "--stage10a-rootfs-materialization-probe",
+                "--evidence-jsonl", "mixed.jsonl",
+                "--approval-token", "token"
+            ])
+        ) { error in
+            XCTAssertTrue("\(error)".contains("Choose only one diagnostic probe"))
+        }
+
+        XCTAssertThrowsError(
+            try Phase6BenchmarkOptions.parse([
+                "--stage10b-runtime-comparison",
+                "--rootfs-materialization-strategy", "apfsClone",
+                "--evidence-jsonl", "stage10b.jsonl",
+                "--approval-token", "token"
+            ])
+        ) { error in
+            XCTAssertTrue("\(error)".contains("--stage10b-runtime-comparison supports only"))
+        }
+    }
+
+    func testStage10BRuntimeComparisonValidatorRequiresMeasuredComparisonAndNoUnmeasuredGatePass() {
+        let fullCopyRecord = stage10BIteration(
+            requestedStrategy: .fullCopy,
+            runLabel: "stage10b-fullcopy",
+            upDuration: 100,
+            readinessDuration: 60,
+            rootfsPreparation: [.completeTestBreakdown],
+            rootfsWorkAvoided: .false
+        )
+        let clonefileRecord = stage10BIteration(
+            requestedStrategy: .clonefile,
+            runLabel: "stage10b-clonefile",
+            upDuration: 60,
+            readinessDuration: 58,
+            rootfsPreparation: [.clonefileTestBreakdown],
+            rootfsWorkAvoided: .true
+        )
+        let fullCopySummary = stage10BStrategySummary(
+            requestedStrategy: .fullCopy,
+            observedStrategies: [.copy],
+            upDuration: 100,
+            readinessDuration: 60,
+            rootfsWorkAvoided: .false
+        )
+        let clonefileSummary = stage10BStrategySummary(
+            requestedStrategy: .clonefile,
+            observedStrategies: [.clonefile],
+            upDuration: 60,
+            readinessDuration: 58,
+            rootfsWorkAvoided: .true
+        )
+        let comparison = Stage10BRuntimeComparisonRecord(
+            timestamp: "2026-06-13T14:20:00Z",
+            fullCopy: fullCopySummary,
+            cloneCandidate: clonefileSummary
+        )
+
+        XCTAssertEqual(comparison.recommendation, .recommendStage10CRepeatedWarmBenchmark)
+        XCTAssertEqual(
+            Stage10BRuntimeComparisonEvidenceValidator().validate(
+                records: [fullCopyRecord, clonefileRecord],
+                comparison: comparison
+            ),
+            []
+        )
+
+        let unmeasuredGatePass = Stage10BRuntimeComparisonRecord(
+            timestamp: "2026-06-13T14:21:00Z",
+            fullCopy: fullCopySummary,
+            cloneCandidate: clonefileSummary,
+            dockerOrOrbStackGateMeasured: false,
+            dockerOrOrbStackGatePassed: true
+        )
+        XCTAssertEqual(
+            Set(
+                Stage10BRuntimeComparisonEvidenceValidator().validate(
+                    records: [fullCopyRecord, clonefileRecord],
+                    comparison: unmeasuredGatePass
+                ).map(\.code)
+            ),
+            ["stage10b-docker-orbstack-gate-unmeasured"]
+        )
+
+        let missingJobMetrics = Phase6BenchmarkIterationRecord(
+            timestamp: "2026-06-13T14:22:00Z",
+            project: "cca-linuxpod-stage10b-missing",
+            runLabel: "stage10b-missing",
+            iteration: 1,
+            environment: benchmarkMetadata(
+                lifecycle: .persistentWarmProjectRuntime,
+                lifecycleMode: .rootfsCacheHitRuntime,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .hit,
+                initfsCacheStatus: .hit
+            ),
+            status: .measured,
+            durationsSeconds: Phase6BenchmarkDurations(
+                up: 10,
+                status: 0.02,
+                logs: 0.01,
+                cleanup: 0.2,
+                rootfsPrep: 0.1,
+                healthcheck: 0.5
+            ),
+            guest: HostFootprintGuestStats(
+                cgroupMemoryCurrentBytes: 128 * 1024 * 1024,
+                cgroupMemoryLimitBytes: nil,
+                cgroupMemoryLimitUnlimited: true,
+                processCount: 7,
+                cpuUsageUsec: 500,
+                blockReadBytes: 2048,
+                blockWriteBytes: 4096,
+                processRSSBytes: 64 * 1024 * 1024
+            ),
+            hostPhysicalMemoryStatus: .blocked,
+            actionCount: 16,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            healthcheckAttempts: 1,
+            dataFootprintBytes: 32 * 1024 * 1024,
+            failure: nil,
+            rootfsPreparation: [.completeTestBreakdown],
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+        XCTAssertTrue(
+            Stage10BRuntimeComparisonEvidenceValidator().validate(
+                records: [missingJobMetrics],
+                comparison: comparison
+            ).map(\.code).contains("stage10b-job-metrics-missing")
+        )
+    }
+
     func testStage9DHotplugProviderProbeRuntimeResourceNamesStayBelowLinuxPodIDLimit() {
         let projectPrefix = "stage9d"
         let runLabel = "stage9d-hotplug-provider-feasibility"
@@ -3260,6 +3426,98 @@ final class RuntimeContractTests: XCTestCase {
         )
     }
 
+    private func stage10BIteration(
+        requestedStrategy: RootfsMaterializationStrategy,
+        runLabel: String,
+        upDuration: Double,
+        readinessDuration: Double,
+        rootfsPreparation: [RootfsPreparationBreakdown],
+        rootfsWorkAvoided: EvidenceTruthValue
+    ) -> Phase6BenchmarkIterationRecord {
+        Phase6BenchmarkIterationRecord(
+            timestamp: "2026-06-13T14:20:00Z",
+            project: "cca-linuxpod-\(runLabel)",
+            runLabel: runLabel,
+            iteration: 1,
+            environment: benchmarkMetadata(
+                lifecycle: .persistentWarmProjectRuntime,
+                lifecycleMode: .rootfsCacheHitRuntime,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .hit,
+                initfsCacheStatus: .hit
+            ),
+            status: .measured,
+            durationsSeconds: Phase6BenchmarkDurations(
+                up: upDuration,
+                status: 0.02,
+                logs: 0.01,
+                cleanup: 0.25,
+                rootfsPrep: 0.12,
+                initfsPrep: 0.02,
+                volumeCreateOrReuse: 0.01,
+                podCreateOrReuse: 4.0,
+                containerStart: 1.1,
+                healthcheck: readinessDuration
+            ),
+            guest: HostFootprintGuestStats(
+                cgroupMemoryCurrentBytes: 128 * 1024 * 1024,
+                cgroupMemoryLimitBytes: nil,
+                cgroupMemoryLimitUnlimited: true,
+                processCount: 7,
+                cpuUsageUsec: 500,
+                blockReadBytes: rootfsWorkAvoided == .true ? 1024 : 2048,
+                blockWriteBytes: rootfsWorkAvoided == .true ? 2048 : 4096,
+                processRSSBytes: 64 * 1024 * 1024
+            ),
+            hostPhysicalMemoryStatus: .blocked,
+            actionCount: 16,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            healthcheckAttempts: 3,
+            jobAttempts: 2,
+            successfulJobCount: 2,
+            jobExitCodes: ["migrate=0", "seed=0"],
+            dataFootprintBytes: 32 * 1024 * 1024,
+            cleanupResult: "clean",
+            failure: nil,
+            rootfsPreparation: rootfsPreparation,
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+    }
+
+    private func stage10BStrategySummary(
+        requestedStrategy: RootfsMaterializationStrategy,
+        observedStrategies: [RootfsMaterializationStrategy],
+        upDuration: Double,
+        readinessDuration: Double,
+        rootfsWorkAvoided: EvidenceTruthValue
+    ) -> Stage10BStrategyRuntimeSummary {
+        Stage10BStrategyRuntimeSummary(
+            requestedStrategy: requestedStrategy,
+            observedStrategies: observedStrategies,
+            measured: true,
+            upDurationSeconds: upDuration,
+            readinessDurationSeconds: readinessDuration,
+            rootfsPrepDurationSeconds: 0.12,
+            projectRootfsMaterializeDurationSeconds: 0.04,
+            containerRootfsMaterializeDurationSeconds: 0.05,
+            blockReadBytes: rootfsWorkAvoided == .true ? 1024 : 2048,
+            blockWriteBytes: rootfsWorkAvoided == .true ? 2048 : 4096,
+            healthcheckAttempts: 3,
+            jobAttempts: 2,
+            successfulJobCount: 2,
+            volumeExistedBeforeRun: false,
+            volumeCreateOrReuseDurationSeconds: 0.01,
+            dataFootprintBytes: 32 * 1024 * 1024,
+            cleanupResult: "clean",
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            hostPortProbeStatus: "notMeasured",
+            loadWindowStatus: "notMeasured",
+            rootfsWorkAvoided: rootfsWorkAvoided,
+            failure: nil
+        )
+    }
+
     private func stage9BProbeRecord(
         probeCase: Stage9BHotplugProbeCase,
         podObjectCreated: Bool = true,
@@ -3750,6 +4008,29 @@ private extension RootfsPreparationBreakdown {
         rootfsDestinationPath: "/tmp/runtime/rootfs/postgres.ext4",
         rootfsMaterializationStrategy: .copy,
         rootfsWorkAvoided: .false,
+        rootfsCacheClaim: .baseArtifactHit
+    )
+
+    static let clonefileTestBreakdown = RootfsPreparationBreakdown(
+        actionKind: "prepareImageRootfs",
+        resourceName: "mirror.gcr.io/library/postgres:16-alpine",
+        image: "mirror.gcr.io/library/postgres:16-alpine",
+        imageReferenceResolveDuration: 0.12,
+        imageStoreLookupDuration: nil,
+        platformValidationDuration: 0.03,
+        imagePullDuration: nil,
+        baseRootfsCacheLookupDuration: 0.01,
+        baseRootfsCacheHit: true,
+        baseRootfsCreateOrUnpackDuration: 0.0,
+        containerRootfsMaterializeDuration: 0.04,
+        containerRootfsCopyDuration: nil,
+        containerRootfsCloneDuration: 0.04,
+        containerRootfsMountPrepareDuration: 0.01,
+        rootfsBytesCopied: nil,
+        rootfsSourcePath: "/tmp/cache/postgres.ext4",
+        rootfsDestinationPath: "/tmp/runtime/rootfs/postgres.ext4",
+        rootfsMaterializationStrategy: .clonefile,
+        rootfsWorkAvoided: .true,
         rootfsCacheClaim: .baseArtifactHit
     )
 }

@@ -1139,14 +1139,27 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
             } else {
                 metadata["baseRootfsCreateOrUnpackDuration"] = "0.000000"
             }
-            let copyStarted = Date()
-            try copyReplacing(source: rootfsCacheURL, destination: rootfsURL)
-            metadata["containerRootfsMaterializeDuration"] = durationString(since: copyStarted)
-            metadata["containerRootfsCopyDuration"] = metadata["containerRootfsMaterializeDuration"]
-            metadata["rootfsMaterializationStrategy"] = RootfsMaterializationStrategy.copy.rawValue
-            metadata["rootfsWorkAvoided"] = EvidenceTruthValue.false.rawValue
-            if let bytesCopied = fileSize(rootfsURL) {
-                metadata["rootfsBytesCopied"] = "\(bytesCopied)"
+            if let strategy = rootfsMaterializationStrategyOverride(from: event.metadata) {
+                let result = try await RootfsMaterializer().materialize(
+                    source: rootfsCacheURL,
+                    destination: rootfsURL,
+                    strategy: strategy,
+                    context: RootfsMaterializationContext(
+                        adapterOwnedRoot: stateStore.root,
+                        phase: .cachedBaseToProjectRootfs
+                    )
+                )
+                applyRootfsMaterializationMetadata(result, to: &metadata)
+            } else {
+                let copyStarted = Date()
+                try copyReplacing(source: rootfsCacheURL, destination: rootfsURL)
+                metadata["containerRootfsMaterializeDuration"] = durationString(since: copyStarted)
+                metadata["containerRootfsCopyDuration"] = metadata["containerRootfsMaterializeDuration"]
+                metadata["rootfsMaterializationStrategy"] = RootfsMaterializationStrategy.copy.rawValue
+                metadata["rootfsWorkAvoided"] = EvidenceTruthValue.false.rawValue
+                if let bytesCopied = fileSize(rootfsURL) {
+                    metadata["rootfsBytesCopied"] = "\(bytesCopied)"
+                }
             }
         } else if !FileManager.default.fileExists(atPath: rootfsURL.path) {
             let unpackStarted = Date()
@@ -1218,8 +1231,9 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
     private func containerRootfs(
         for service: ServicePlan,
         containerID: String,
-        in state: ProjectRuntime
-    ) throws -> (mount: Mount, metadata: [String: String]) {
+        in state: ProjectRuntime,
+        strategyOverride: RootfsMaterializationStrategy?
+    ) async throws -> (mount: Mount, metadata: [String: String]) {
         var metadata: [String: String] = [
             "service": service.name,
             "image": service.image
@@ -1236,24 +1250,37 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
         try FileManager.default.createDirectory(at: containersDirectory, withIntermediateDirectories: true)
         metadata["containerRootfsMountPrepareDuration"] = durationString(since: mountPrepareStarted)
         let cloneURL = containersDirectory.appendingPathComponent("\(containerID).ext4")
-        if FileManager.default.fileExists(atPath: cloneURL.path) {
-            try FileManager.default.removeItem(at: cloneURL)
+        if let strategy = strategyOverride {
+            let result = try await RootfsMaterializer().materialize(
+                source: baseURL,
+                destination: cloneURL,
+                strategy: strategy,
+                context: RootfsMaterializationContext(
+                    adapterOwnedRoot: stateStore.root,
+                    phase: .projectRootfsToContainerRootfs
+                )
+            )
+            applyRootfsMaterializationMetadata(result, to: &metadata)
+        } else {
+            if FileManager.default.fileExists(atPath: cloneURL.path) {
+                try FileManager.default.removeItem(at: cloneURL)
+            }
+            let copyStarted = Date()
+            try FileManager.default.copyItem(at: baseURL, to: cloneURL)
+            metadata["containerRootfsMaterializeDuration"] = durationString(since: copyStarted)
+            metadata["containerRootfsCopyDuration"] = metadata["containerRootfsMaterializeDuration"]
+            metadata["rootfsMaterializationStrategy"] = RootfsMaterializationStrategy.copy.rawValue
+            metadata["rootfsWorkAvoided"] = EvidenceTruthValue.false.rawValue
+            if let bytesCopied = fileSize(cloneURL) {
+                metadata["rootfsBytesCopied"] = "\(bytesCopied)"
+            }
         }
-        let copyStarted = Date()
-        try FileManager.default.copyItem(at: baseURL, to: cloneURL)
-        metadata["containerRootfsMaterializeDuration"] = durationString(since: copyStarted)
-        metadata["containerRootfsCopyDuration"] = metadata["containerRootfsMaterializeDuration"]
         metadata["rootfsSourcePath"] = baseURL.path
         metadata["rootfsDestinationPath"] = cloneURL.path
         metadata["rootfsMountType"] = "block"
         metadata["rootfsMountFormat"] = "ext4"
         metadata["rootfsMountIsBlock"] = "true"
-        metadata["rootfsMaterializationStrategy"] = RootfsMaterializationStrategy.copy.rawValue
-        metadata["rootfsWorkAvoided"] = EvidenceTruthValue.false.rawValue
         metadata["rootfsCacheClaim"] = RootfsCacheClaim.baseArtifactHit.rawValue
-        if let bytesCopied = fileSize(cloneURL) {
-            metadata["rootfsBytesCopied"] = "\(bytesCopied)"
-        }
         return (
             Mount.block(
                 format: "ext4",
@@ -1316,7 +1343,12 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
                 "podAttachment": state.podCreated ? "reused-existing-pod" : "registered-before-create"
             ]
         }
-        let rootfs = try containerRootfs(for: service, containerID: containerID, in: state)
+        let rootfs = try await containerRootfs(
+            for: service,
+            containerID: containerID,
+            in: state,
+            strategyOverride: rootfsMaterializationStrategyOverride(from: event.metadata)
+        )
 
         let mounts = try containerMounts(for: service, in: state)
         let logCapture = RuntimeLogCapture()
@@ -1917,6 +1949,50 @@ public actor ContainerizationLinuxPodRuntimeExecutor: LinuxPodRuntimeExecuting {
 
     private func elapsedSeconds(since start: Date) -> Double {
         Date().timeIntervalSince(start)
+    }
+
+    private func rootfsMaterializationStrategyOverride(
+        from metadata: [String: String]
+    ) -> RootfsMaterializationStrategy? {
+        guard let value = metadata["rootfsMaterializationStrategyOverride"],
+              let strategy = RootfsMaterializationStrategy(rawValue: value) else {
+            return nil
+        }
+        return strategy
+    }
+
+    private func applyRootfsMaterializationMetadata(
+        _ result: RootfsMaterializationResult,
+        to metadata: inout [String: String]
+    ) {
+        metadata["rootfsRequestedMaterializationStrategy"] = result.requestedStrategy.rawValue
+        metadata["rootfsMaterializationStrategy"] = result.actualStrategy.rawValue
+        if let fallbackStrategy = result.fallbackStrategy {
+            metadata["rootfsMaterializationFallbackStrategy"] = fallbackStrategy.rawValue
+        }
+        if let fallbackReason = result.fallbackReason {
+            metadata["rootfsMaterializationFallbackReason"] = fallbackReason
+        }
+        metadata["containerRootfsMaterializeDuration"] = String(format: "%.6f", result.durationSeconds)
+        metadata["rootfsWorkAvoided"] = result.rootfsWorkAvoided.rawValue
+        metadata["rootfsByteForByteCopyAvoided"] = result.byteForByteCopyAvoided.rawValue
+        metadata["rootfsCloneAttempted"] = "\(result.cloneAttempted)"
+        metadata["rootfsCloneReturnedSuccess"] = "\(result.cloneReturnedSuccess)"
+        metadata["rootfsCloneVerified"] = "\(result.cloneVerified)"
+        metadata["rootfsCloneSucceeded"] = "\(result.cloneSucceeded)"
+        metadata["rootfsCloneVerificationStrength"] = result.cloneVerificationStrength.rawValue
+        metadata["rootfsCopyAttempted"] = "\(result.copyAttempted)"
+        metadata["rootfsCopySucceeded"] = "\(result.copySucceeded)"
+        metadata["rootfsPublicCloneAPIMissing"] = "\(result.publicCloneAPIMissing)"
+        if result.cloneAttempted {
+            metadata["containerRootfsCloneDuration"] = metadata["containerRootfsMaterializeDuration"]
+        }
+        if result.copyAttempted {
+            metadata["containerRootfsCopyDuration"] = metadata["containerRootfsMaterializeDuration"]
+        }
+        if let bytesCopied = result.bytesCopiedIfKnown {
+            metadata["rootfsBytesCopied"] = "\(bytesCopied)"
+        }
     }
 
     private func copyReplacing(source: URL, destination: URL) throws {

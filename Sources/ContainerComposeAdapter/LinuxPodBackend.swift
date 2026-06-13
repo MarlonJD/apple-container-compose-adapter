@@ -238,7 +238,7 @@ public struct LinuxPodBackend: RuntimeBackend {
 
         switch command {
         case .up:
-            appendUpActions(plan: plan, builder: &builder)
+            appendUpActions(plan: plan, options: options, builder: &builder)
         case .down:
             appendDownActions(plan: plan, includeVolumes: options.includeVolumes, builder: &builder)
         case .logs:
@@ -266,6 +266,10 @@ public struct LinuxPodBackend: RuntimeBackend {
     }
 
     private func appendUpActions(plan: RuntimePlan, builder: inout ActionBuilder) {
+        appendUpActions(plan: plan, options: RuntimeOptions(), builder: &builder)
+    }
+
+    private func appendUpActions(plan: RuntimePlan, options: RuntimeOptions, builder: inout ActionBuilder) {
         let projectResource = stateStore.projectName(for: plan.project)
         builder.append(
             kind: .createProjectRuntime,
@@ -275,7 +279,12 @@ public struct LinuxPodBackend: RuntimeBackend {
             metadata: projectRuntimeMetadata(plan)
         )
 
-        appendPrepareImageRootfsActions(images: Set(plan.services.map(\.image)).sorted(), plan: plan, builder: &builder)
+        appendPrepareImageRootfsActions(
+            images: Set(plan.services.map(\.image)).sorted(),
+            plan: plan,
+            options: options,
+            builder: &builder
+        )
 
         for volume in plan.volumes {
             builder.append(
@@ -305,7 +314,7 @@ public struct LinuxPodBackend: RuntimeBackend {
                 resourceName: serviceResourceName(plan: plan, service: service),
                 description: "Add \(service.kind.rawValue) \(service.name) to shared LinuxPod with project hosts entries.",
                 mutatesRuntime: true,
-                metadata: serviceMetadata(service, plan: plan)
+                metadata: serviceMetadata(service, plan: plan, options: options)
             )
         }
         for service in orderedServices {
@@ -350,7 +359,12 @@ public struct LinuxPodBackend: RuntimeBackend {
             metadata: projectRuntimeMetadata(plan)
         )
 
-        appendPrepareImageRootfsActions(images: Set(services.map(\.image)).sorted(), plan: plan, builder: &builder)
+        appendPrepareImageRootfsActions(
+            images: Set(services.map(\.image)).sorted(),
+            plan: plan,
+            options: RuntimeOptions(),
+            builder: &builder
+        )
 
         let selectedVolumeNames = Set(
             services.flatMap(\.mounts).compactMap { mount in
@@ -435,22 +449,27 @@ public struct LinuxPodBackend: RuntimeBackend {
     private func appendPrepareImageRootfsActions(
         images: [String],
         plan: RuntimePlan,
+        options: RuntimeOptions,
         builder: inout ActionBuilder
     ) {
         for image in images {
             let rootfsPath = stateStore.rootfsPath(project: plan.project, image: image)
             let rootfsCachePath = stateStore.rootfsCachePath(image: image)
             let rootfsCacheStatus = cacheStatus(rootfsCachePath)
+            var metadata = [
+                "rootfs": rootfsPath.path,
+                "rootfsCache": rootfsCachePath.path,
+                "cache": rootfsCacheStatus
+            ]
+            if let strategy = options.rootfsMaterializationStrategyOverride {
+                metadata["rootfsMaterializationStrategyOverride"] = strategy.rawValue
+            }
             builder.append(
                 kind: .prepareImageRootfs,
                 resourceName: image,
                 description: "Prepare public image rootfs for \(image); reusable cache \(rootfsCacheStatus).",
                 mutatesRuntime: true,
-                metadata: [
-                    "rootfs": rootfsPath.path,
-                    "rootfsCache": rootfsCachePath.path,
-                    "cache": rootfsCacheStatus
-                ]
+                metadata: metadata
             )
         }
     }
@@ -503,13 +522,20 @@ public struct LinuxPodBackend: RuntimeBackend {
         "\(stateStore.projectName(for: plan.project))-\(ProjectName(service.name).sanitized)"
     }
 
-    private func serviceMetadata(_ service: ServicePlan, plan: RuntimePlan) -> [String: String] {
+    private func serviceMetadata(
+        _ service: ServicePlan,
+        plan: RuntimePlan,
+        options: RuntimeOptions = RuntimeOptions()
+    ) -> [String: String] {
         var metadata: [String: String] = [
             "hosts": serviceHostsMetadata(plan),
             "image": service.image,
             "process": service.command.isEmpty ? "image-defaults" : "explicit-command",
             "podAttachment": "hotplug-or-reuse"
         ]
+        if let strategy = options.rootfsMaterializationStrategyOverride {
+            metadata["rootfsMaterializationStrategyOverride"] = strategy.rawValue
+        }
         if !service.command.isEmpty {
             metadata["command"] = service.command.joined(separator: " ")
         } else {
