@@ -96,10 +96,10 @@ final class RuntimeContractTests: XCTestCase {
         )
         XCTAssertEqual(
             DockerHubOfficialImageMirror.rewrite(
-                image: "ghcr.io/apple/containerization/vminit:0.26.5",
+                image: "ghcr.io/apple/containerization/vminit:0.33.4",
                 mirror: "mirror.gcr.io"
             ),
-            "ghcr.io/apple/containerization/vminit:0.26.5"
+            "ghcr.io/apple/containerization/vminit:0.33.4"
         )
         XCTAssertEqual(
             DockerHubOfficialImageMirror.rewrite(
@@ -148,7 +148,7 @@ final class RuntimeContractTests: XCTestCase {
             project: ProjectName("Mirror Test"),
             services: [
                 ServicePlan(name: "db", image: "docker.io/library/postgres:16-alpine"),
-                ServicePlan(name: "init", image: "ghcr.io/apple/containerization/vminit:0.26.5")
+                ServicePlan(name: "init", image: "ghcr.io/apple/containerization/vminit:0.33.4")
             ],
             volumes: [VolumePlan(name: "db-data")],
             diagnostics: [
@@ -161,7 +161,7 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(mirrored.project, plan.project)
         XCTAssertEqual(mirrored.services.map(\.image), [
             "mirror.gcr.io/library/postgres:16-alpine",
-            "ghcr.io/apple/containerization/vminit:0.26.5"
+            "ghcr.io/apple/containerization/vminit:0.33.4"
         ])
         XCTAssertEqual(mirrored.volumes, plan.volumes)
         XCTAssertEqual(mirrored.diagnostics, plan.diagnostics)
@@ -951,6 +951,373 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(options.warmStatePrimerPolicy, .allWarmProjectRuntime)
     }
 
+    func testStage9BHotplugProbeOptionsParseDiagnosticHarnessMode() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--stage9b-hotplug-probe",
+            "--evidence-jsonl", "stage9b.jsonl",
+            "--approval-token", "token",
+            "--project-prefix", "stage9b",
+            "--run-label", "hotplug-capability",
+            "--docker-hub-mirror", "mirror.gcr.io/"
+        ])
+
+        XCTAssertTrue(options.stage9BHotplugProbe)
+        XCTAssertEqual(options.projectName(forIteration: 1), "stage9b-hotplug-capability-001")
+        XCTAssertEqual(options.dockerHubMirror, "mirror.gcr.io")
+        XCTAssertEqual(options.warmStatePrimerPolicy, .none)
+    }
+
+    func testStage9BHotplugProbeRuntimeResourceSuffixesStayBelowLinuxPodIDLimit() {
+        let projectPrefix = "s9b0334"
+        let runLabel = "hp"
+        let maxLinuxPodIDLength = 64
+
+        for (sequence, probeCase) in Stage9BHotplugProbeCase.allCases.enumerated() where probeCase != .cleanupProof {
+            let project = ProjectName("\(projectPrefix)-\(runLabel)-\(String(format: "%02d", sequence + 1))-\(probeCase.runtimeResourceSuffix)")
+            let resourceName = project.adapterOwnedName(prefix: LinuxPodStateStore.ownedPrefix)
+
+            XCTAssertLessThanOrEqual(resourceName.count, maxLinuxPodIDLength, probeCase.rawValue)
+            XCTAssertLessThanOrEqual("\(resourceName)-initial".count, maxLinuxPodIDLength, probeCase.rawValue)
+            XCTAssertLessThanOrEqual("\(resourceName)-second".count, maxLinuxPodIDLength, probeCase.rawValue)
+        }
+    }
+
+    func testStage9DHotplugProviderProbeOptionsParseDiagnosticHarnessMode() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--stage9d-hotplug-provider-probe",
+            "--evidence-jsonl", "stage9d.jsonl",
+            "--approval-token", "token",
+            "--project-prefix", "stage9d",
+            "--run-label", "hotplug-provider",
+            "--docker-hub-mirror", "mirror.gcr.io/"
+        ])
+
+        XCTAssertFalse(options.stage9BHotplugProbe)
+        XCTAssertTrue(options.stage9DHotplugProviderProbe)
+        XCTAssertEqual(options.projectName(forIteration: 1), "stage9d-hotplug-provider-001")
+        XCTAssertEqual(options.dockerHubMirror, "mirror.gcr.io")
+
+        let normal = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "normal.jsonl",
+            "--approval-token", "token"
+        ])
+        XCTAssertFalse(normal.stage9DHotplugProviderProbe)
+    }
+
+    func testStage10ARootfsMaterializationProbeOptionsParseDiagnosticHarnessMode() throws {
+        let options = try Phase6BenchmarkOptions.parse([
+            "--stage10a-rootfs-materialization-probe",
+            "--rootfs-materialization-strategy", "clonefile",
+            "--evidence-jsonl", "stage10a.jsonl",
+            "--approval-token", "token",
+            "--project-prefix", "stage10a",
+            "--run-label", "rootfs-materialization",
+            "--docker-hub-mirror", "mirror.gcr.io/"
+        ])
+
+        XCTAssertTrue(options.stage10ARootfsMaterializationProbe)
+        XCTAssertEqual(options.rootfsMaterializationStrategy, .clonefile)
+        XCTAssertFalse(options.stage9BHotplugProbe)
+        XCTAssertFalse(options.stage9DHotplugProviderProbe)
+        XCTAssertEqual(options.dockerHubMirror, "mirror.gcr.io")
+
+        let normal = try Phase6BenchmarkOptions.parse([
+            "--evidence-jsonl", "normal.jsonl",
+            "--approval-token", "token"
+        ])
+        XCTAssertFalse(normal.stage10ARootfsMaterializationProbe)
+        XCTAssertEqual(normal.rootfsMaterializationStrategy, .fullCopy)
+    }
+
+    func testStage10ARootfsMaterializationProbeRejectsInvalidStrategyAndProbeMixing() throws {
+        XCTAssertThrowsError(
+            try Phase6BenchmarkOptions.parse([
+                "--stage10a-rootfs-materialization-probe",
+                "--rootfs-materialization-strategy", "teleport",
+                "--evidence-jsonl", "stage10a.jsonl",
+                "--approval-token", "token"
+            ])
+        ) { error in
+            XCTAssertTrue("\(error)".contains("--rootfs-materialization-strategy"))
+        }
+
+        XCTAssertThrowsError(
+            try Phase6BenchmarkOptions.parse([
+                "--stage9d-hotplug-provider-probe",
+                "--stage10a-rootfs-materialization-probe",
+                "--evidence-jsonl", "mixed.jsonl",
+                "--approval-token", "token"
+            ])
+        ) { error in
+            XCTAssertTrue("\(error)".contains("Choose only one diagnostic probe"))
+        }
+    }
+
+    func testStage9DHotplugProviderProbeRuntimeResourceNamesStayBelowLinuxPodIDLimit() {
+        let projectPrefix = "stage9d"
+        let runLabel = "stage9d-hotplug-provider-feasibility"
+        let project = Stage9DHotplugProviderProbeRuntimeNames.ownedProjectResourceName(
+            projectPrefix: projectPrefix,
+            runLabel: runLabel
+        )
+
+        XCTAssertLessThanOrEqual(project.count, Stage9DHotplugProviderProbeRuntimeNames.linuxPodIDMaximumLength, runLabel)
+        XCTAssertLessThanOrEqual(
+            Stage9DHotplugProviderProbeRuntimeNames.initialContainerID(projectResource: project).count,
+            Stage9DHotplugProviderProbeRuntimeNames.linuxPodIDMaximumLength,
+            runLabel
+        )
+        XCTAssertLessThanOrEqual(
+            Stage9DHotplugProviderProbeRuntimeNames.secondContainerID(projectResource: project).count,
+            Stage9DHotplugProviderProbeRuntimeNames.linuxPodIDMaximumLength,
+            runLabel
+        )
+        XCTAssertGreaterThan(
+            ProjectName("\(projectPrefix)-\(runLabel)-provider").adapterOwnedName(prefix: LinuxPodStateStore.ownedPrefix).count,
+            Stage9DHotplugProviderProbeRuntimeNames.linuxPodIDMaximumLength,
+            "This assertion documents why Stage 9D does not include the human run label in LinuxPod IDs."
+        )
+    }
+
+    func testStage9DSchemaValidatesProviderInstallOnlyEvidence() {
+        let record = stage9DProbeRecord(
+            probeCases: [.providerInstallOnly],
+            provider: .installedOnly,
+            rootfs: .notAttempted,
+            hotplug: .notAttempted,
+            interpretation: .providerSpikeNeedsMoreWork
+        )
+
+        XCTAssertEqual(Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [record]), [])
+    }
+
+    func testStage9DSchemaValidatesProviderCalledButRealHotplugFailedEvidence() {
+        let record = stage9DProbeRecord(
+            probeCases: [.providerInstallOnly, .providerReceivesHotplug],
+            status: .failed,
+            provider: .called,
+            rootfs: .blockAttachUnsupported,
+            hotplug: .providerCalledButNotAttached,
+            interpretation: .publicBlockHotplugAPIMissing
+        )
+
+        XCTAssertEqual(Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [record]), [])
+    }
+
+    func testStage9DSchemaValidatesRealHotplugSuccessEvidenceShape() {
+        let record = stage9DProbeRecord(
+            probeCases: [.providerInstallOnly, .providerReceivesHotplug, .realSecondContainerHotplug],
+            provider: .called,
+            rootfs: .publicBlockAttached,
+            hotplug: .realSecondContainerStarted,
+            interpretation: .hotplugAvailable
+        )
+
+        XCTAssertEqual(Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [record]), [])
+    }
+
+    func testStage9DValidatorRejectsFakeAttachedFilesystemSuccess() {
+        let fake = stage9DProbeRecord(
+            probeCases: [.providerInstallOnly, .providerReceivesHotplug, .realSecondContainerHotplug],
+            provider: .called,
+            rootfs: .fakeAttachedFilesystem,
+            hotplug: .realSecondContainerStarted,
+            interpretation: .hotplugAvailable
+        )
+
+        XCTAssertEqual(
+            Set(Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [fake]).map(\.code)),
+            [
+                "stage9d-fake-attached-filesystem",
+                "stage9d-real-hotplug-success-unsafe"
+            ]
+        )
+    }
+
+    func testStage9DValidatorRejectsUnsafeProductAvailabilityClaim() {
+        let unsafe = stage9DProbeRecord(
+            probeCases: [.providerInstallOnly, .providerReceivesHotplug],
+            status: .failed,
+            provider: .called,
+            rootfs: .blockAttachUnsupported,
+            hotplug: .providerCalledButNotAttached,
+            interpretation: Stage9DInterpretationEvidence(
+                productHotplugAvailable: true,
+                productShouldDependOnHotplug: true,
+                nextRecommendedPath: .forcedWarmServiceRecreateWithHotplug
+            )
+        )
+
+        XCTAssertEqual(
+            Set(Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [unsafe]).map(\.code)),
+            [
+                "stage9d-product-availability-unsafe",
+                "stage9d-product-dependency-unsafe"
+            ]
+        )
+    }
+
+    func testStage9DValidatorRequiresNotMeasuredHostPortAndLoadWindowGaps() {
+        let invalid = stage9DProbeRecord(
+            probeCases: [.providerInstallOnly],
+            provider: .installedOnly,
+            rootfs: .notAttempted,
+            hotplug: .notAttempted,
+            interpretation: .providerSpikeNeedsMoreWork,
+            hostPortProbeStatus: "missing",
+            loadWindowStatus: "missing"
+        )
+
+        XCTAssertEqual(
+            Set(Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [invalid]).map(\.code)),
+            [
+                "stage9d-host-port-not-measured-missing",
+                "stage9d-load-window-not-measured-missing"
+            ]
+        )
+    }
+
+    func testStage10AEvidenceSchemaValidatesFullCopyCloneFallbackAndUnsupportedRecords() {
+        let fullCopy = stage10AProbeRecord(strategy: .fullCopy)
+        XCTAssertEqual(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [fullCopy]), [])
+
+        let cloneSuccess = stage10AProbeRecord(strategy: .cloneSuccess)
+        XCTAssertEqual(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [cloneSuccess]), [])
+
+        let fallback = stage10AProbeRecord(strategy: .cloneFallback)
+        XCTAssertEqual(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [fallback]), [])
+
+        let unsupported = stage10AProbeRecord(status: .unsupported, strategy: .unsupportedClone)
+        XCTAssertEqual(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [unsupported]), [])
+    }
+
+    func testStage10AEvidenceValidatorRejectsUnsafeProductReadyClaims() {
+        let dirtyCleanup = stage10AProbeRecord(
+            strategy: .cloneSuccess,
+            cleanup: RootfsMaterializationCleanupEvidence(
+                cleanupResult: "leftovers",
+                cleanupStateDirectoryExistsAfterCleanup: true,
+                leftoverPathsCount: 1,
+                zeroAdapterOwnedLeftovers: false
+            ),
+            interpretation: .productReadyFixture
+        )
+        let noWorkAvoided = stage10AProbeRecord(
+            strategy: .fullCopy,
+            interpretation: .productReadyFixture
+        )
+        let unknownCloneVerification = stage10AProbeRecord(
+            strategy: .cloneSuccessWithUnknownVerification,
+            interpretation: .productReadyFixture
+        )
+
+        XCTAssertEqual(
+            Set(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [dirtyCleanup]).map(\.code)),
+            ["stage10a-product-ready-cleanup-unsafe"]
+        )
+        XCTAssertEqual(
+            Set(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [noWorkAvoided]).map(\.code)),
+            ["stage10a-product-ready-work-not-avoided"]
+        )
+        XCTAssertEqual(
+            Set(Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: [unknownCloneVerification]).map(\.code)),
+            ["stage10a-product-ready-clone-verification-unknown"]
+        )
+    }
+
+    func testStage10AMaterializerFullCopyCreatesDestinationAndDoesNotMutateSource() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage10a-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(".container-compose-adapter", isDirectory: true)
+        let source = root
+            .appendingPathComponent("cache", isDirectory: true)
+            .appendingPathComponent("source.ext4")
+        let destination = root
+            .appendingPathComponent("cca-linuxpod-stage10a-probe", isDirectory: true)
+            .appendingPathComponent("runtime", isDirectory: true)
+            .appendingPathComponent("rootfs", isDirectory: true)
+            .appendingPathComponent("project.ext4")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let sourceBytes = Data("stage10a-rootfs".utf8)
+        try sourceBytes.write(to: source)
+
+        let result = try await RootfsMaterializer().materialize(
+            source: source,
+            destination: destination,
+            strategy: .fullCopy,
+            context: RootfsMaterializationContext(
+                adapterOwnedRoot: root,
+                phase: .cachedBaseToProjectRootfs
+            )
+        )
+
+        XCTAssertEqual(result.requestedStrategy, .fullCopy)
+        XCTAssertEqual(result.actualStrategy, .fullCopy)
+        XCTAssertTrue(result.copyAttempted)
+        XCTAssertTrue(result.copySucceeded)
+        XCTAssertFalse(result.cloneSucceeded)
+        XCTAssertEqual(result.byteForByteCopyAvoided, .false)
+        XCTAssertEqual(result.rootfsWorkAvoided, .false)
+        XCTAssertEqual(try Data(contentsOf: destination), sourceBytes)
+        XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
+    }
+
+    func testStage10AMaterializerRejectsNonAdapterOwnedDestination() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage10a-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(".container-compose-adapter", isDirectory: true)
+        let source = root.appendingPathComponent("cache/source.ext4")
+        let destination = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("outside-stage10a.ext4")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("stage10a-rootfs".utf8).write(to: source)
+
+        do {
+            _ = try await RootfsMaterializer().materialize(
+                source: source,
+                destination: destination,
+                strategy: .fullCopy,
+                context: RootfsMaterializationContext(
+                    adapterOwnedRoot: root,
+                    phase: .cachedBaseToProjectRootfs
+                )
+            )
+            XCTFail("Expected materializer to reject a non-adapter-owned destination.")
+        } catch let error as RootfsMaterializationError {
+            XCTAssertEqual(error, .destinationOutsideAdapterOwnedRoot(destination.path, root.path))
+        }
+    }
+
+    func testStage10AMaterializerCloneStrategyFallsBackSafelyWhenCloneIsUnsupported() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("cca-stage10a-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(".container-compose-adapter", isDirectory: true)
+        let source = root.appendingPathComponent("cache/source.ext4")
+        let destination = root.appendingPathComponent("cca-linuxpod-stage10a-probe/runtime/rootfs/project.ext4")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("stage10a-rootfs".utf8).write(to: source)
+
+        let result = try await RootfsMaterializer().materialize(
+            source: source,
+            destination: destination,
+            strategy: .clonefile,
+            context: RootfsMaterializationContext(
+                adapterOwnedRoot: root,
+                phase: .cachedBaseToProjectRootfs,
+                publicCloneAPIsAvailable: false
+            )
+        )
+
+        XCTAssertEqual(result.requestedStrategy, .clonefile)
+        XCTAssertFalse(result.cloneSupported)
+        XCTAssertFalse(result.cloneAttempted)
+        XCTAssertEqual(result.actualStrategy, .fullCopy)
+        XCTAssertEqual(result.fallbackStrategy, .fullCopy)
+        XCTAssertTrue(result.fallbackReason?.contains("public clone API unavailable") == true)
+        XCTAssertTrue(result.copySucceeded)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+    }
+
     func testStage8BenchmarkEvidenceValidatorRequiresClassifiedMetricsAndNotMeasuredGaps() {
         let valid = Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T13:00:00Z",
@@ -994,7 +1361,10 @@ final class RuntimeContractTests: XCTestCase {
             cleanupStateDirectoryExistsAfterCleanup: false,
             healthcheckAttempts: 4,
             dataFootprintBytes: 32 * 1024 * 1024,
-            failure: nil
+            failure: nil,
+            rootfsPreparation: [.completeTestBreakdown],
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
         )
 
         XCTAssertEqual(Stage8BenchmarkEvidenceValidator().validate(records: [valid]), [])
@@ -1039,7 +1409,9 @@ final class RuntimeContractTests: XCTestCase {
                 "stage8-guest-metrics-missing",
                 "stage8-process-rss-missing",
                 "stage8-data-footprint-missing",
-                "stage8-cleanup-leftovers"
+                "stage8-cleanup-leftovers",
+                "stage9-rootfs-breakdown-missing",
+                "stage9-block-io-attribution-missing"
             ]
         )
     }
@@ -1049,13 +1421,23 @@ final class RuntimeContractTests: XCTestCase {
             lifecycleMode: .allWarmProjectRuntime,
             iteration: 1,
             cleanupStateDirectoryExistsAfterCleanup: true,
-            cleanupResult: "preserved-project-runtime-for-warm-reuse"
+            cleanupResult: "preserved-project-runtime-for-warm-reuse",
+            rootfsPreparation: [.completeTestBreakdown],
+            hotplugDiagnostics: .completeTest(),
+            warmServiceRecreate: .noOpWarmReconcileNotEvidence,
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
         )
         let finalClean = completeStage8IterationRecord(
             lifecycleMode: .allWarmProjectRuntime,
             iteration: 2,
             cleanupStateDirectoryExistsAfterCleanup: false,
-            cleanupResult: "clean"
+            cleanupResult: "clean",
+            rootfsPreparation: [.completeTestBreakdown],
+            hotplugDiagnostics: .completeTest(),
+            warmServiceRecreate: .noOpWarmReconcileNotEvidence,
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
         )
 
         XCTAssertEqual(Stage8BenchmarkEvidenceValidator().validate(records: [preserved, finalClean]), [])
@@ -1071,13 +1453,178 @@ final class RuntimeContractTests: XCTestCase {
             iteration: 1,
             cleanupStateDirectoryExistsAfterCleanup: false,
             cleanupResult: "clean",
-            podReuseVerificationStatus: "markerFile"
+            podReuseVerificationStatus: "markerFile",
+            rootfsPreparation: [.completeTestBreakdown],
+            hotplugDiagnostics: .completeTest(),
+            warmServiceRecreate: .noOpWarmReconcileNotEvidence,
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
         )
 
         XCTAssertEqual(
             Set(Stage8BenchmarkEvidenceValidator().validate(records: [markerOnly]).map(\.code)),
             ["stage8-pod-reuse-unverified"]
         )
+    }
+
+    func testStage9ARootfsBreakdownAndBlockIOAttributionAreRequiredForMeasuredRecords() {
+        let missingBreakdown = completeStage8IterationRecord(
+            lifecycleMode: .rootfsCacheHitRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean"
+        )
+
+        XCTAssertTrue(
+            Set(Stage8BenchmarkEvidenceValidator().validate(records: [missingBreakdown]).map(\.code))
+                .isSuperset(of: [
+                    "stage9-rootfs-breakdown-missing",
+                    "stage9-block-io-attribution-missing"
+                ])
+        )
+
+        let explicitBreakdown = completeStage8IterationRecord(
+            lifecycleMode: .rootfsCacheHitRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean",
+            rootfsPreparation: [
+                RootfsPreparationBreakdown(
+                    actionKind: "prepareImageRootfs",
+                    resourceName: "mirror.gcr.io/library/postgres:16-alpine",
+                    image: "mirror.gcr.io/library/postgres:16-alpine",
+                    imageReferenceResolveDuration: 0.12,
+                    imageStoreLookupDuration: nil,
+                    platformValidationDuration: 0.03,
+                    imagePullDuration: nil,
+                    baseRootfsCacheLookupDuration: 0.01,
+                    baseRootfsCacheHit: true,
+                    baseRootfsCreateOrUnpackDuration: 0.0,
+                    containerRootfsMaterializeDuration: nil,
+                    containerRootfsCopyDuration: nil,
+                    containerRootfsCloneDuration: nil,
+                    containerRootfsMountPrepareDuration: nil,
+                    rootfsBytesCopied: 2_147_483_648,
+                    rootfsSourcePath: "/tmp/cache/postgres.ext4",
+                    rootfsDestinationPath: "/tmp/runtime/rootfs/postgres.ext4",
+                    rootfsMaterializationStrategy: .copy,
+                    rootfsWorkAvoided: .false,
+                    rootfsCacheClaim: .baseArtifactHit
+                )
+            ],
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+
+        let diagnosticCodes = Set(Stage8BenchmarkEvidenceValidator().validate(records: [explicitBreakdown]).map(\.code))
+        XCTAssertFalse(diagnosticCodes.contains("stage9-rootfs-breakdown-missing"))
+        XCTAssertFalse(diagnosticCodes.contains("stage9-block-io-attribution-missing"))
+    }
+
+    func testStage9APersistentPodFailureCanBeStructuredKnownBlocker() {
+        let failedHotplug = Phase6BenchmarkIterationRecord(
+            timestamp: "2026-06-12T13:20:01Z",
+            project: "cca-linuxpod-stage9-f-hotplug",
+            runLabel: "stage9-hotplug",
+            iteration: 1,
+            environment: benchmarkMetadata(
+                lifecycle: .persistentWarmProjectRuntime,
+                lifecycleMode: .persistentPodHotplug,
+                imageCacheStatus: .hit,
+                rootfsCacheStatus: .hit,
+                initfsCacheStatus: .miss,
+                podExistedBeforeRun: true,
+                podReuseVerificationStatus: "liveExecutorState"
+            ),
+            status: .failed,
+            durationsSeconds: Phase6BenchmarkDurations(up: nil, status: nil, logs: nil, cleanup: 0.12),
+            guest: nil,
+            hostPhysicalMemoryStatus: .blocked,
+            actionCount: 3,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean",
+            failure: "invalidState: \"pod must be initialized to add container\"",
+            hotplugDiagnostics: HotplugLifecycleDiagnostics(
+                podMarkerExists: true,
+                runtimeDirectoryExists: true,
+                podObjectInitialized: true,
+                podObjectPhase: "created",
+                podCreatedStateKnown: true,
+                podActuallyRunning: true,
+                podReconnectAttempted: false,
+                podReconnectSucceeded: false,
+                podReuseClaim: .liveObject,
+                addContainerAttempted: true,
+                addContainerPhase: .afterPodCreate,
+                hotplugAttempted: true,
+                hotplugSucceeded: false,
+                hotplugUnsupported: true,
+                duplicateContainerDetected: false,
+                failurePhase: "addContainer",
+                failureErrorType: "invalidState",
+                failureErrorMessage: "pod must be initialized to add container",
+                mutationBeforeFailure: .true
+            ),
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+
+        XCTAssertEqual(Stage8BenchmarkEvidenceValidator().validate(records: [failedHotplug]), [])
+    }
+
+    func testStage9ARejectsMarkerOnlyPodReuseClaimInStructuredDiagnostics() {
+        let markerOnly = completeStage8IterationRecord(
+            lifecycleMode: .allWarmProjectRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean",
+            podReuseVerificationStatus: "liveExecutorState",
+            rootfsPreparation: [.completeTestBreakdown],
+            hotplugDiagnostics: HotplugLifecycleDiagnostics.completeTest(
+                podReuseClaim: .markerOnly,
+                hotplugSucceeded: false
+            ),
+            warmServiceRecreate: .noOpWarmReconcileNotEvidence,
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+
+        XCTAssertEqual(
+            Set(Stage8BenchmarkEvidenceValidator().validate(records: [markerOnly]).map(\.code)),
+            ["stage9-marker-only-pod-reuse"]
+        )
+    }
+
+    func testStage9AAllWarmRequiresForcedRecreateOrExplicitNoOpNonViability() {
+        let missing = completeStage8IterationRecord(
+            lifecycleMode: .allWarmProjectRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean",
+            rootfsPreparation: [.completeTestBreakdown],
+            hotplugDiagnostics: .completeTest(),
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+
+        XCTAssertEqual(
+            Set(Stage8BenchmarkEvidenceValidator().validate(records: [missing]).map(\.code)),
+            ["stage9-warm-service-recreate-missing"]
+        )
+
+        let explicitNoOp = completeStage8IterationRecord(
+            lifecycleMode: .allWarmProjectRuntime,
+            iteration: 1,
+            cleanupStateDirectoryExistsAfterCleanup: false,
+            cleanupResult: "clean",
+            rootfsPreparation: [.completeTestBreakdown],
+            hotplugDiagnostics: .completeTest(),
+            warmServiceRecreate: .noOpWarmReconcileNotEvidence,
+            blockIOAttribution: "wholeRunOnly",
+            rootfsBlockIOAttribution: "notMeasured"
+        )
+
+        XCTAssertEqual(Stage8BenchmarkEvidenceValidator().validate(records: [explicitNoOp]), [])
     }
 
     func testStage8RuntimeEvidenceFilesValidateToKnownRuntimeBlockers() throws {
@@ -1095,7 +1642,18 @@ final class RuntimeContractTests: XCTestCase {
 
         for filename in successfulModes {
             let diagnostics = try validator.validate(evidenceURL: evidenceDir.appendingPathComponent(filename))
-            XCTAssertEqual(Set(diagnostics.map(\.code)), ["stage8-process-rss-missing"], filename)
+            var expected: Set<String> = [
+                "stage8-process-rss-missing",
+                "stage9-rootfs-breakdown-missing",
+                "stage9-block-io-attribution-missing"
+            ]
+            if filename.contains("stage8-G") {
+                expected.formUnion([
+                    "stage9-hotplug-diagnostics-missing",
+                    "stage9-warm-service-recreate-missing"
+                ])
+            }
+            XCTAssertEqual(Set(diagnostics.map(\.code)), expected, filename)
         }
 
         let persistentPodDiagnostics = try validator.validate(
@@ -1116,9 +1674,371 @@ final class RuntimeContractTests: XCTestCase {
                 "stage8-healthcheck-attempts-missing",
                 "stage8-guest-metrics-missing",
                 "stage8-process-rss-missing",
-                "stage8-data-footprint-missing"
+                "stage8-data-footprint-missing",
+                "stage9-hotplug-diagnostics-missing"
             ]
         )
+    }
+
+    func testStage9ARuntimeEvidenceFilesValidateToRemainingKnownRuntimeBlockers() throws {
+        let evidenceDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent("docs/evidence/linuxpod-stage9a-benchmark", isDirectory: true)
+        let validator = Stage8BenchmarkEvidenceValidator()
+
+        let persistentPodDiagnostics = try validator.validate(
+            evidenceURL: evidenceDir.appendingPathComponent(
+                "20260612T233739Z-stage9a-F-persistent-pod-hotplug.jsonl"
+            )
+        )
+        XCTAssertEqual(Set(persistentPodDiagnostics.map(\.code)), [])
+
+        let allWarmDiagnostics = try validator.validate(
+            evidenceURL: evidenceDir.appendingPathComponent(
+                "20260612T233739Z-stage9a-G-all-warm-project-runtime.jsonl"
+            )
+        )
+        XCTAssertEqual(Set(allWarmDiagnostics.map(\.code)), ["stage8-process-rss-missing"])
+
+        let retestPersistentPodURL = evidenceDir.appendingPathComponent(
+            "20260613T085301Z-stage9a0334meta-F-persistent-pod-hotplug.jsonl"
+        )
+        let retestPersistentPodDiagnostics = try validator.validate(evidenceURL: retestPersistentPodURL)
+        XCTAssertEqual(Set(retestPersistentPodDiagnostics.map(\.code)), [])
+
+        let retestPersistentPod = try readFirstPhase6IterationRecord(retestPersistentPodURL)
+        XCTAssertEqual(retestPersistentPod.environment?.containerizationVersion, "0.33.4")
+        XCTAssertEqual(retestPersistentPod.status, .failed)
+        XCTAssertEqual(retestPersistentPod.failure, #"unsupported: "hotplug not supported""#)
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.failurePhase, "addContainer")
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.failureErrorType, "unsupported")
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.hotplugUnsupported, true)
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.podReuseClaim, .liveObject)
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.vmConfigExtensionCount, 0)
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.vmConfigExtensionTypes, [])
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.hotplugProviderInstalled, false)
+        XCTAssertEqual(retestPersistentPod.hotplugDiagnostics?.hotplugProviderStatus, "missing")
+        XCTAssertEqual(retestPersistentPod.rootfsPreparation?.first?.rootfsMountType, "block")
+        XCTAssertEqual(retestPersistentPod.rootfsPreparation?.first?.rootfsMountFormat, "ext4")
+        XCTAssertEqual(retestPersistentPod.rootfsPreparation?.first?.rootfsMountIsBlock, true)
+        XCTAssertEqual(retestPersistentPod.cleanupResult, "clean")
+
+        let retestAllWarmURL = evidenceDir.appendingPathComponent(
+            "20260613T085301Z-stage9a0334meta-G-all-warm-project-runtime.jsonl"
+        )
+        let retestAllWarmDiagnostics = try validator.validate(evidenceURL: retestAllWarmURL)
+        XCTAssertEqual(Set(retestAllWarmDiagnostics.map(\.code)), ["stage8-process-rss-missing"])
+
+        let retestAllWarm = try readFirstPhase6IterationRecord(retestAllWarmURL)
+        XCTAssertEqual(retestAllWarm.environment?.containerizationVersion, "0.33.4")
+        XCTAssertEqual(retestAllWarm.status, .measured)
+        XCTAssertEqual(retestAllWarm.warmServiceRecreate?.recreateStrategy, .noOp)
+        XCTAssertEqual(retestAllWarm.warmServiceRecreate?.noOpWarmReconcile, true)
+        XCTAssertEqual(retestAllWarm.warmServiceRecreate?.notProductViabilityEvidence, true)
+        XCTAssertEqual(retestAllWarm.hotplugDiagnostics?.hotplugProviderInstalled, false)
+        XCTAssertEqual(retestAllWarm.hotplugDiagnostics?.vmConfigExtensionCount, 0)
+        XCTAssertTrue(retestAllWarm.rootfsPreparation?.allSatisfy { $0.rootfsMountType == "block" } == true)
+        XCTAssertTrue(retestAllWarm.rootfsPreparation?.allSatisfy { $0.rootfsMountFormat == "ext4" } == true)
+        XCTAssertTrue(retestAllWarm.rootfsPreparation?.allSatisfy { $0.rootfsMountIsBlock == true } == true)
+        XCTAssertEqual(retestAllWarm.cleanupResult, "clean")
+    }
+
+    func testStage9BHotplugProbeEvidenceRequiresAllLifecycleCasesAndCleanupProof() {
+        let complete = [
+            stage9BProbeRecord(
+                probeCase: .preCreateRegistrationControl,
+                podCreateCalled: true,
+                podCreateSucceeded: true,
+                initialContainerRegisteredBeforeCreate: true,
+                addContainerPhase: .beforePodCreate
+            ),
+            stage9BProbeRecord(
+                probeCase: .emptyPodPostCreateAddContainer,
+                podCreateCalled: true,
+                podCreateSucceeded: true,
+                postCreateAddContainerAttempted: true,
+                addContainerPhase: .afterPodCreateEmptyPod,
+                hotplugAttempted: true,
+                hotplugSucceeded: false,
+                hotplugUnsupported: true,
+                failurePhase: "addContainer",
+                failureErrorType: "invalidState",
+                failureErrorMessage: "pod must be initialized to add container",
+                mutationBeforeFailure: .true
+            ),
+            stage9BProbeRecord(
+                probeCase: .nonEmptyPodPostCreateAddSecondContainer,
+                podCreateCalled: true,
+                podCreateSucceeded: true,
+                initialContainerRegisteredBeforeCreate: true,
+                initialContainerStarted: true,
+                postCreateAddContainerAttempted: true,
+                addContainerPhase: .afterPodCreateNonEmptyPod,
+                hotplugAttempted: true,
+                hotplugSucceeded: false,
+                hotplugUnsupported: true,
+                failurePhase: "addContainer",
+                failureErrorType: "invalidState",
+                failureErrorMessage: "pod must be initialized to add container",
+                mutationBeforeFailure: .true
+            ),
+            stage9BProbeRecord(
+                probeCase: .duplicateContainerIDGuard,
+                podCreateCalled: false,
+                podCreateSucceeded: false,
+                initialContainerRegisteredBeforeCreate: true,
+                postCreateAddContainerAttempted: true,
+                addContainerPhase: .duplicateContainer,
+                duplicateContainerDetected: true,
+                failurePhase: "addContainer",
+                failureErrorType: "invalidArgument",
+                failureErrorMessage: "container already exists",
+                mutationBeforeFailure: .false
+            ),
+            stage9BProbeRecord(
+                probeCase: .cleanupProof,
+                addContainerPhase: .unknown
+            )
+        ]
+
+        XCTAssertEqual(Stage9BHotplugProbeEvidenceValidator().validate(records: complete), [])
+
+        var missingCleanup = Array(complete.dropLast())
+        missingCleanup[1] = stage9BProbeRecord(
+            probeCase: .emptyPodPostCreateAddContainer,
+            podCreateCalled: true,
+            podCreateSucceeded: true,
+            postCreateAddContainerAttempted: true,
+            addContainerPhase: .afterPodCreateEmptyPod,
+            hotplugAttempted: true,
+            hotplugSucceeded: false,
+            cleanupResult: "leftovers",
+            cleanupStateDirectoryExistsAfterCleanup: true,
+            leftoverPathsCount: 1
+        )
+
+        XCTAssertEqual(
+            Set(Stage9BHotplugProbeEvidenceValidator().validate(records: missingCleanup).map(\.code)),
+            [
+                "stage9b-cleanup-proof-missing",
+                "stage9b-case-cleanup-leftovers"
+            ]
+        )
+    }
+
+    func testStage9BHotplugProbeRecordUsesRequestedEvidenceKeys() throws {
+        let record = stage9BProbeRecord(
+            probeCase: .nonEmptyPodPostCreateAddSecondContainer,
+            podCreateCalled: true,
+            podCreateSucceeded: true,
+            initialContainerRegisteredBeforeCreate: true,
+            initialContainerStarted: true,
+            postCreateAddContainerAttempted: true,
+            postCreateAddContainerSucceeded: false,
+            addContainerPhase: .afterPodCreateNonEmptyPod,
+            hotplugAttempted: true,
+            hotplugSucceeded: false,
+            hotplugUnsupported: true,
+            failurePhase: "addContainer",
+            failureErrorType: "invalidState",
+            failureErrorMessage: "pod must be initialized to add container",
+            mutationBeforeFailure: .true
+        )
+
+        let encoded = try JSONEncoder().encode(record)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        XCTAssertEqual(object["recordType"] as? String, Stage9BHotplugProbeSchema.caseRecordType)
+        XCTAssertEqual(object["schemaVersion"] as? String, Stage9BHotplugProbeSchema.version)
+        XCTAssertEqual(object["probeCase"] as? String, "non-empty-pod-post-create-add-second-container")
+        XCTAssertEqual(object["addContainerPhase"] as? String, "afterPodCreateNonEmptyPod")
+        XCTAssertEqual(object["podObjectCreated"] as? Bool, true)
+        XCTAssertEqual(object["podCreateCalled"] as? Bool, true)
+        XCTAssertEqual(object["podCreateSucceeded"] as? Bool, true)
+        XCTAssertEqual(object["initialContainerRegisteredBeforeCreate"] as? Bool, true)
+        XCTAssertEqual(object["initialContainerStarted"] as? Bool, true)
+        XCTAssertEqual(object["postCreateAddContainerAttempted"] as? Bool, true)
+        XCTAssertEqual(object["postCreateAddContainerSucceeded"] as? Bool, false)
+        XCTAssertEqual(object["hotplugAttempted"] as? Bool, true)
+        XCTAssertEqual(object["hotplugSucceeded"] as? Bool, false)
+        XCTAssertEqual(object["hotplugUnsupported"] as? Bool, true)
+        XCTAssertEqual(object["duplicateContainerDetected"] as? Bool, false)
+        XCTAssertEqual(object["failurePhase"] as? String, "addContainer")
+        XCTAssertEqual(object["failureErrorType"] as? String, "invalidState")
+        XCTAssertEqual(object["mutationBeforeFailure"] as? String, "true")
+        XCTAssertEqual(object["cleanupResult"] as? String, "clean")
+        XCTAssertEqual(object["cleanupStateDirectoryExistsAfterCleanup"] as? Bool, false)
+        XCTAssertEqual(object["leftoverPathsCount"] as? Int, 0)
+        XCTAssertEqual(object["runtimePackageVersion"] as? String, "0.26.5")
+        XCTAssertEqual(object["containerizationVersion"] as? String, "0.26.5")
+        XCTAssertEqual(object["macOSVersion"] as? String, "test-macos")
+    }
+
+    func testStage9BRuntimeEvidenceFilesValidateHotplugCapabilityProbe() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let evidenceURL = root
+            .appendingPathComponent(
+                "docs/evidence/linuxpod-stage9b-hotplug-capability/20260613T000136Z-stage9b-hotplug-capability.jsonl"
+            )
+        let retestEvidenceURL = root
+            .appendingPathComponent(
+                "docs/evidence/linuxpod-stage9b-hotplug-capability/20260613T002830Z-stage9b-hotplug-capability-0334-escalated.jsonl"
+            )
+
+        XCTAssertEqual(try Stage9BHotplugProbeEvidenceValidator().validate(evidenceURL: evidenceURL), [])
+        XCTAssertEqual(try Stage9BHotplugProbeEvidenceValidator().validate(evidenceURL: retestEvidenceURL), [])
+
+        let records = try readStage9BProbeRecords(evidenceURL)
+        let byCase = Dictionary(uniqueKeysWithValues: records.map { ($0.probeCase, $0) })
+
+        let preCreate = try XCTUnwrap(byCase[.preCreateRegistrationControl])
+        XCTAssertTrue(preCreate.initialContainerRegisteredBeforeCreate)
+        XCTAssertTrue(preCreate.podCreateSucceeded)
+        XCTAssertTrue(preCreate.initialContainerStarted)
+        XCTAssertFalse(preCreate.hotplugAttempted)
+
+        let emptyPod = try XCTUnwrap(byCase[.emptyPodPostCreateAddContainer])
+        XCTAssertTrue(emptyPod.hotplugAttempted)
+        XCTAssertFalse(emptyPod.hotplugSucceeded)
+        XCTAssertTrue(emptyPod.hotplugUnsupported)
+        XCTAssertEqual(emptyPod.failureErrorType, "invalidState")
+
+        let nonEmptyPod = try XCTUnwrap(byCase[.nonEmptyPodPostCreateAddSecondContainer])
+        XCTAssertTrue(nonEmptyPod.initialContainerRegisteredBeforeCreate)
+        XCTAssertTrue(nonEmptyPod.initialContainerStarted)
+        XCTAssertTrue(nonEmptyPod.hotplugAttempted)
+        XCTAssertFalse(nonEmptyPod.hotplugSucceeded)
+        XCTAssertTrue(nonEmptyPod.hotplugUnsupported)
+        XCTAssertEqual(nonEmptyPod.failureErrorMessage, "invalidState: \"pod must be initialized to add container\"")
+
+        let duplicate = try XCTUnwrap(byCase[.duplicateContainerIDGuard])
+        XCTAssertTrue(duplicate.duplicateContainerDetected)
+        XCTAssertEqual(duplicate.failureErrorType, "invalidArgument")
+
+        let cleanup = try XCTUnwrap(byCase[.cleanupProof])
+        XCTAssertEqual(cleanup.cleanupResult, "clean")
+        XCTAssertFalse(cleanup.cleanupStateDirectoryExistsAfterCleanup)
+        XCTAssertEqual(cleanup.leftoverPathsCount, 0)
+
+        let retestRecords = try readStage9BProbeRecords(retestEvidenceURL)
+        let retestByCase = Dictionary(uniqueKeysWithValues: retestRecords.map { ($0.probeCase, $0) })
+
+        let retestPreCreate = try XCTUnwrap(retestByCase[.preCreateRegistrationControl])
+        XCTAssertEqual(retestPreCreate.runtimePackageVersion, "0.33.4")
+        XCTAssertEqual(retestPreCreate.containerizationVersion, "0.33.4")
+        XCTAssertTrue(retestPreCreate.initialContainerRegisteredBeforeCreate)
+        XCTAssertTrue(retestPreCreate.podCreateSucceeded)
+        XCTAssertTrue(retestPreCreate.initialContainerStarted)
+
+        let retestEmptyPod = try XCTUnwrap(retestByCase[.emptyPodPostCreateAddContainer])
+        XCTAssertTrue(retestEmptyPod.hotplugAttempted)
+        XCTAssertFalse(retestEmptyPod.hotplugSucceeded)
+        XCTAssertTrue(retestEmptyPod.hotplugUnsupported)
+        XCTAssertEqual(retestEmptyPod.failureErrorType, "unsupported")
+        XCTAssertEqual(retestEmptyPod.failureErrorMessage, #"unsupported: "hotplug not supported""#)
+
+        let retestNonEmptyPod = try XCTUnwrap(retestByCase[.nonEmptyPodPostCreateAddSecondContainer])
+        XCTAssertTrue(retestNonEmptyPod.initialContainerRegisteredBeforeCreate)
+        XCTAssertTrue(retestNonEmptyPod.initialContainerStarted)
+        XCTAssertTrue(retestNonEmptyPod.hotplugAttempted)
+        XCTAssertFalse(retestNonEmptyPod.hotplugSucceeded)
+        XCTAssertTrue(retestNonEmptyPod.hotplugUnsupported)
+        XCTAssertEqual(retestNonEmptyPod.failureErrorType, "unsupported")
+
+        let retestCleanup = try XCTUnwrap(retestByCase[.cleanupProof])
+        XCTAssertEqual(retestCleanup.cleanupResult, "clean")
+        XCTAssertFalse(retestCleanup.cleanupStateDirectoryExistsAfterCleanup)
+        XCTAssertEqual(retestCleanup.leftoverPathsCount, 0)
+    }
+
+    func testStage9DRuntimeEvidenceFileValidatesHotplugProviderFeasibilityProbe() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let evidenceURL = root.appendingPathComponent(
+            "docs/evidence/linuxpod-stage9d-hotplug-provider/20260613T093056Z-stage9d-hotplug-provider-feasibility.jsonl"
+        )
+
+        XCTAssertEqual(try Stage9DHotplugProviderProbeEvidenceValidator().validate(evidenceURL: evidenceURL), [])
+
+        let line = try XCTUnwrap(
+            String(data: try Data(contentsOf: evidenceURL), encoding: .utf8)?
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .first
+        )
+        let record = try JSONDecoder().decode(Stage9DHotplugProviderProbeRecord.self, from: Data(line.utf8))
+
+        XCTAssertEqual(record.containerizationVersion, "0.33.4")
+        XCTAssertEqual(record.containerizationRevision, "9275f365dd555c8f072e7d250d809f5eb7bdd746")
+        XCTAssertEqual(record.probeCases, [.providerInstallOnly, .providerReceivesHotplug])
+        XCTAssertTrue(record.provider.extensionInstalled)
+        XCTAssertEqual(record.provider.linuxPodConfigExtensionCount, 1)
+        XCTAssertEqual(record.provider.vmConfigExtensionCount, 1)
+        XCTAssertTrue(record.provider.providerDidCreateCalled)
+        XCTAssertTrue(record.provider.hotplugProviderInstalled)
+        XCTAssertTrue(record.provider.providerHotplugCalled)
+        XCTAssertTrue(record.hotplug.postCreateAddContainerReachedProvider)
+        XCTAssertFalse(record.hotplug.realHotplugSucceeded)
+        XCTAssertFalse(record.hotplug.secondContainerStarted)
+        XCTAssertEqual(record.hotplug.blocker, .unsupportedRootfsBlockHotplug)
+        XCTAssertEqual(record.rootfs.rootfsAttachStrategy, .vzUSBMassStorage)
+        XCTAssertTrue(record.cleanup.attachedDeviceDetached ?? false)
+        XCTAssertEqual(record.cleanup.cleanupResult, "clean")
+        XCTAssertTrue(record.cleanup.zeroAdapterOwnedLeftovers)
+        XCTAssertFalse(record.interpretation.productHotplugAvailable)
+        XCTAssertFalse(record.interpretation.productShouldDependOnHotplug)
+        XCTAssertEqual(record.interpretation.nextRecommendedPath, .upstreamIssue)
+    }
+
+    func testStage10ARuntimeEvidenceFileValidatesRootfsMaterializationProbe() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let evidenceURL = root.appendingPathComponent(
+            "docs/evidence/linuxpod-stage10a-rootfs-materialization/20260613T101706Z-stage10a-rootfs-materialization.jsonl"
+        )
+
+        XCTAssertEqual(try Stage10ARootfsMaterializationProbeEvidenceValidator().validate(evidenceURL: evidenceURL), [])
+
+        let lines = try XCTUnwrap(String(data: try Data(contentsOf: evidenceURL), encoding: .utf8))
+            .split(separator: "\n", omittingEmptySubsequences: true)
+        let records = try lines.map {
+            try JSONDecoder().decode(RootfsMaterializationProbeRecord.self, from: Data($0.utf8))
+        }
+
+        XCTAssertEqual(records.count, 2)
+        let fullCopy = try XCTUnwrap(records.first { $0.strategy.requestedStrategy == .fullCopy })
+        let auto = try XCTUnwrap(records.first { $0.strategy.requestedStrategy == .auto })
+
+        XCTAssertEqual(fullCopy.status, .measured)
+        XCTAssertEqual(fullCopy.environment.containerizationVersion, "0.33.4")
+        XCTAssertEqual(fullCopy.environment.containerizationRevision, "9275f365dd555c8f072e7d250d809f5eb7bdd746")
+        XCTAssertTrue(fullCopy.environment.runtimePathRedacted)
+        XCTAssertEqual(fullCopy.strategy.actualStrategy, .fullCopy)
+        XCTAssertFalse(fullCopy.strategy.cloneAttempted)
+        XCTAssertFalse(fullCopy.strategy.cloneSucceeded)
+        XCTAssertTrue(fullCopy.strategy.copyAttempted)
+        XCTAssertEqual(fullCopy.strategy.rootfsWorkAvoided, .false)
+        XCTAssertEqual(fullCopy.strategy.byteForByteCopyAvoided, .false)
+        XCTAssertEqual(fullCopy.correctness.baseRootfsUnchanged, .true)
+        XCTAssertTrue(fullCopy.correctness.ext4ImageLooksValid ?? false)
+        XCTAssertEqual(fullCopy.cleanup.cleanupResult, "clean")
+        XCTAssertEqual(fullCopy.cleanup.leftoverPathsCount, 0)
+        XCTAssertFalse(fullCopy.interpretation.productReady)
+        XCTAssertEqual(fullCopy.interpretation.nextRecommendedPath, .keepFullCopy)
+
+        XCTAssertEqual(auto.status, .measured)
+        XCTAssertEqual(auto.strategy.actualStrategy, .clonefile)
+        XCTAssertTrue(auto.strategy.cloneAttempted)
+        XCTAssertTrue(auto.strategy.cloneReturnedSuccess)
+        XCTAssertTrue(auto.strategy.cloneVerified)
+        XCTAssertTrue(auto.strategy.cloneSucceeded)
+        XCTAssertEqual(auto.strategy.cloneVerificationStrength, .strong)
+        XCTAssertFalse(auto.strategy.copyAttempted)
+        XCTAssertEqual(auto.strategy.rootfsWorkAvoided, .true)
+        XCTAssertEqual(auto.strategy.byteForByteCopyAvoided, .true)
+        XCTAssertNil(auto.sizesBytes.bytesCopiedIfKnown)
+        XCTAssertEqual(auto.correctness.baseRootfsUnchanged, .true)
+        XCTAssertTrue(auto.correctness.ext4ImageLooksValid ?? false)
+        XCTAssertEqual(auto.cleanup.cleanupResult, "clean")
+        XCTAssertEqual(auto.cleanup.leftoverPathsCount, 0)
+        XCTAssertFalse(auto.interpretation.productReady)
+        XCTAssertEqual(auto.interpretation.nextRecommendedPath, .useClonefileForRootfs)
     }
 
     func testPhase6SeedImageStorePolicyRequiresSentinelAndProtectsExternalSources() throws {
@@ -2280,7 +3200,12 @@ final class RuntimeContractTests: XCTestCase {
         iteration: Int,
         cleanupStateDirectoryExistsAfterCleanup: Bool,
         cleanupResult: String,
-        podReuseVerificationStatus: String? = nil
+        podReuseVerificationStatus: String? = nil,
+        rootfsPreparation: [RootfsPreparationBreakdown]? = nil,
+        hotplugDiagnostics: HotplugLifecycleDiagnostics? = nil,
+        warmServiceRecreate: WarmServiceRecreateMetadata? = nil,
+        blockIOAttribution: String? = nil,
+        rootfsBlockIOAttribution: String? = nil
     ) -> Phase6BenchmarkIterationRecord {
         Phase6BenchmarkIterationRecord(
             timestamp: "2026-06-12T13:10:0\(iteration)Z",
@@ -2326,8 +3251,180 @@ final class RuntimeContractTests: XCTestCase {
             healthcheckAttempts: 1,
             dataFootprintBytes: 32 * 1024 * 1024,
             cleanupResult: cleanupResult,
-            failure: nil
+            failure: nil,
+            rootfsPreparation: rootfsPreparation,
+            hotplugDiagnostics: hotplugDiagnostics,
+            warmServiceRecreate: warmServiceRecreate,
+            blockIOAttribution: blockIOAttribution,
+            rootfsBlockIOAttribution: rootfsBlockIOAttribution
         )
+    }
+
+    private func stage9BProbeRecord(
+        probeCase: Stage9BHotplugProbeCase,
+        podObjectCreated: Bool = true,
+        podCreateCalled: Bool = false,
+        podCreateSucceeded: Bool = false,
+        podObjectPhase: String? = "created",
+        podCreatedStateKnown: Bool = true,
+        podActuallyRunning: Bool? = false,
+        initialContainerRegisteredBeforeCreate: Bool = false,
+        initialContainerStarted: Bool = false,
+        postCreateAddContainerAttempted: Bool = false,
+        postCreateAddContainerSucceeded: Bool = false,
+        addContainerPhase: Stage9BAddContainerPhase,
+        hotplugAttempted: Bool = false,
+        hotplugSucceeded: Bool = false,
+        hotplugUnsupported: Bool = false,
+        duplicateContainerDetected: Bool = false,
+        failurePhase: String? = nil,
+        failureErrorType: String? = nil,
+        failureErrorMessage: String? = nil,
+        mutationBeforeFailure: EvidenceTruthValue = .false,
+        cleanupResult: String = "clean",
+        cleanupStateDirectoryExistsAfterCleanup: Bool = false,
+        leftoverPathsCount: Int = 0
+    ) -> Stage9BHotplugProbeRecord {
+        Stage9BHotplugProbeRecord(
+            timestamp: "2026-06-13T00:00:00Z",
+            project: "cca-linuxpod-stage9b-\(probeCase.rawValue)",
+            probeCase: probeCase,
+            podObjectCreated: podObjectCreated,
+            podCreateCalled: podCreateCalled,
+            podCreateSucceeded: podCreateSucceeded,
+            podObjectPhase: podObjectPhase,
+            podCreatedStateKnown: podCreatedStateKnown,
+            podActuallyRunning: podActuallyRunning,
+            initialContainerRegisteredBeforeCreate: initialContainerRegisteredBeforeCreate,
+            initialContainerStarted: initialContainerStarted,
+            postCreateAddContainerAttempted: postCreateAddContainerAttempted,
+            postCreateAddContainerSucceeded: postCreateAddContainerSucceeded,
+            addContainerPhase: addContainerPhase,
+            hotplugAttempted: hotplugAttempted,
+            hotplugSucceeded: hotplugSucceeded,
+            hotplugUnsupported: hotplugUnsupported,
+            duplicateContainerDetected: duplicateContainerDetected,
+            failurePhase: failurePhase,
+            failureErrorType: failureErrorType,
+            failureErrorMessage: failureErrorMessage,
+            mutationBeforeFailure: mutationBeforeFailure,
+            cleanupResult: cleanupResult,
+            cleanupStateDirectoryExistsAfterCleanup: cleanupStateDirectoryExistsAfterCleanup,
+            leftoverPathsCount: leftoverPathsCount,
+            runtimePackageVersion: "0.26.5",
+            macOSVersion: "test-macos",
+            containerizationVersion: "0.26.5"
+        )
+    }
+
+    private func stage9DProbeRecord(
+        probeCases: [Stage9DProbeCase],
+        status: Stage9DProbeStatus = .measured,
+        provider: Stage9DProviderEvidence,
+        rootfs: Stage9DRootfsEvidence,
+        hotplug: Stage9DHotplugEvidence,
+        cleanup: Stage9DCleanupEvidence = .clean,
+        interpretation: Stage9DInterpretationEvidence,
+        hostPortProbeStatus: String = "notMeasured",
+        loadWindowStatus: String = "notMeasured"
+    ) -> Stage9DHotplugProviderProbeRecord {
+        Stage9DHotplugProviderProbeRecord(
+            timestamp: "2026-06-13T00:00:00Z",
+            status: status,
+            containerizationVersion: "0.33.4",
+            containerizationRevision: "9275f365dd555c8f072e7d250d809f5eb7bdd746",
+            macOSVersion: "test-macos",
+            hostArchitecture: "arm64",
+            probeCases: probeCases,
+            provider: provider,
+            rootfs: rootfs,
+            hotplug: hotplug,
+            cleanup: cleanup,
+            interpretation: interpretation,
+            hostPortTTFBSeconds: nil,
+            hostPortProbeStatus: hostPortProbeStatus,
+            loadWindowSeconds: nil,
+            loadWindowStatus: loadWindowStatus
+        )
+    }
+
+    private func stage10AProbeRecord(
+        status: Stage10ARootfsMaterializationStatus = .measured,
+        strategy: RootfsMaterializationDiagnostics,
+        cleanup: RootfsMaterializationCleanupEvidence = .clean,
+        interpretation: RootfsMaterializationInterpretation = .diagnosticOnly
+    ) -> RootfsMaterializationProbeRecord {
+        RootfsMaterializationProbeRecord(
+            timestamp: "2026-06-13T00:00:00Z",
+            status: status,
+            environment: RootfsMaterializationEnvironment(
+                containerizationVersion: "0.33.4",
+                containerizationRevision: "9275f365dd555c8f072e7d250d809f5eb7bdd746",
+                macOSVersion: "test-macos",
+                hostArchitecture: "arm64",
+                filesystemType: "apfs",
+                adapterOwnedStateRoot: "<repo>/.container-compose-adapter",
+                runtimePath: "<repo>/.container-compose-adapter/cca-linuxpod-stage10a-probe/runtime",
+                runtimePathRedacted: true
+            ),
+            strategy: strategy,
+            paths: RootfsMaterializationPaths(
+                sourceRootfsPath: "<repo>/.container-compose-adapter/cache/rootfs/postgres.ext4",
+                projectRootfsPath: "<repo>/.container-compose-adapter/cca-linuxpod-stage10a-probe/runtime/rootfs/postgres.ext4",
+                containerRootfsPath: "<repo>/.container-compose-adapter/cca-linuxpod-stage10a-probe/runtime/rootfs/containers/db.ext4",
+                sourceAndDestinationSameVolume: true
+            ),
+            durationsSeconds: RootfsMaterializationDurations(
+                imageReferenceLookup: 0.01,
+                imageStoreLookup: 0.02,
+                baseRootfsCacheLookup: 0.001,
+                baseRootfsUnpack: 0,
+                projectRootfsMaterialize: 0.04,
+                containerRootfsMaterialize: 0.05,
+                mountPrepare: 0.001,
+                cleanup: 0.01,
+                totalRootfsPrep: 0.121
+            ),
+            sizesBytes: RootfsMaterializationSizes(
+                sourceRootfs: 2_147_483_648,
+                projectRootfs: 2_147_483_648,
+                containerRootfs: 2_147_483_648,
+                apparentSize: 2_147_483_648,
+                allocatedSize: 1_048_576,
+                bytesCopiedIfKnown: strategy.copySucceeded ? 2_147_483_648 : nil
+            ),
+            io: RootfsMaterializationIOEvidence(
+                blockReadBytesWholeRun: nil,
+                blockWriteBytesWholeRun: nil,
+                phaseBlockIOAttribution: "notMeasured"
+            ),
+            correctness: RootfsMaterializationCorrectnessEvidence(
+                projectRootfsExists: true,
+                containerRootfsExists: true,
+                containerRootfsReadable: true,
+                ext4ImageLooksValid: true,
+                noMutationOfBaseRootfs: true,
+                baseRootfsChecksumBefore: nil,
+                baseRootfsChecksumAfter: nil,
+                baseRootfsUnchanged: .true
+            ),
+            cleanup: cleanup,
+            interpretation: interpretation
+        )
+    }
+
+    private func readStage9BProbeRecords(_ url: URL) throws -> [Stage9BHotplugProbeRecord] {
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        let decoder = JSONDecoder()
+        return try contents.split(separator: "\n").map { line in
+            try decoder.decode(Stage9BHotplugProbeRecord.self, from: Data(line.utf8))
+        }
+    }
+
+    private func readFirstPhase6IterationRecord(_ url: URL) throws -> Phase6BenchmarkIterationRecord {
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        let firstLine = try XCTUnwrap(contents.split(separator: "\n").first)
+        return try JSONDecoder().decode(Phase6BenchmarkIterationRecord.self, from: Data(firstLine.utf8))
     }
 
     private func completeStage4Measurements(
@@ -2630,4 +3727,356 @@ final class RuntimeContractTests: XCTestCase {
             .appendingPathComponent("docs/evidence/fixtures")
             .appendingPathComponent(name)
     }
+}
+
+private extension RootfsPreparationBreakdown {
+    static let completeTestBreakdown = RootfsPreparationBreakdown(
+        actionKind: "prepareImageRootfs",
+        resourceName: "mirror.gcr.io/library/postgres:16-alpine",
+        image: "mirror.gcr.io/library/postgres:16-alpine",
+        imageReferenceResolveDuration: 0.12,
+        imageStoreLookupDuration: nil,
+        platformValidationDuration: 0.03,
+        imagePullDuration: nil,
+        baseRootfsCacheLookupDuration: 0.01,
+        baseRootfsCacheHit: true,
+        baseRootfsCreateOrUnpackDuration: 0.0,
+        containerRootfsMaterializeDuration: nil,
+        containerRootfsCopyDuration: nil,
+        containerRootfsCloneDuration: nil,
+        containerRootfsMountPrepareDuration: nil,
+        rootfsBytesCopied: 2_147_483_648,
+        rootfsSourcePath: "/tmp/cache/postgres.ext4",
+        rootfsDestinationPath: "/tmp/runtime/rootfs/postgres.ext4",
+        rootfsMaterializationStrategy: .copy,
+        rootfsWorkAvoided: .false,
+        rootfsCacheClaim: .baseArtifactHit
+    )
+}
+
+private extension Stage9DProviderEvidence {
+    static let installedOnly = Stage9DProviderEvidence(
+        extensionInstalled: true,
+        extensionType: "CCAHotplugFeasibilityExtension",
+        linuxPodConfigExtensionCount: 1,
+        vmConfigExtensionCount: 1,
+        vmInstanceType: "VZVirtualMachineInstance",
+        hotplugProviderInstalled: true,
+        hotplugProviderType: "CCAHotplugFeasibilityProvider",
+        providerDidCreateCalled: true,
+        providerHotplugCalled: false,
+        providerHotplugVirtioFSCalled: false,
+        providerReleaseHotplugCalled: false,
+        providerReleaseVirtioFSCalled: false
+    )
+
+    static let called = Stage9DProviderEvidence(
+        extensionInstalled: true,
+        extensionType: "CCAHotplugFeasibilityExtension",
+        linuxPodConfigExtensionCount: 1,
+        vmConfigExtensionCount: 1,
+        vmInstanceType: "VZVirtualMachineInstance",
+        hotplugProviderInstalled: true,
+        hotplugProviderType: "CCAHotplugFeasibilityProvider",
+        providerDidCreateCalled: true,
+        providerHotplugCalled: true,
+        providerHotplugVirtioFSCalled: false,
+        providerReleaseHotplugCalled: true,
+        providerReleaseVirtioFSCalled: false
+    )
+}
+
+private extension Stage9DRootfsEvidence {
+    static let notAttempted = Stage9DRootfsEvidence(
+        rootfsMountType: nil,
+        rootfsIsBlock: nil,
+        rootfsIsExt4: nil,
+        rootfsSourcePath: nil,
+        rootfsSourcePathRedacted: true,
+        rootfsAttachStrategy: .none,
+        attachedFilesystemSource: nil,
+        attachedFilesystemSourceKnown: false
+    )
+
+    static let blockAttachUnsupported = Stage9DRootfsEvidence(
+        rootfsMountType: "block",
+        rootfsIsBlock: true,
+        rootfsIsExt4: true,
+        rootfsSourcePath: "<repo>/.container-compose-adapter/projects/stage9d/rootfs/second.ext4",
+        rootfsSourcePathRedacted: true,
+        rootfsAttachStrategy: .unsupported,
+        attachedFilesystemSource: nil,
+        attachedFilesystemSourceKnown: false
+    )
+
+    static let publicBlockAttached = Stage9DRootfsEvidence(
+        rootfsMountType: "block",
+        rootfsIsBlock: true,
+        rootfsIsExt4: true,
+        rootfsSourcePath: "<repo>/.container-compose-adapter/projects/stage9d/rootfs/second.ext4",
+        rootfsSourcePathRedacted: true,
+        rootfsAttachStrategy: .publicVZStorageAttach,
+        attachedFilesystemSource: "/dev/vdb",
+        attachedFilesystemSourceKnown: true
+    )
+
+    static let fakeAttachedFilesystem = Stage9DRootfsEvidence(
+        rootfsMountType: "block",
+        rootfsIsBlock: true,
+        rootfsIsExt4: true,
+        rootfsSourcePath: "<repo>/.container-compose-adapter/projects/stage9d/rootfs/second.ext4",
+        rootfsSourcePathRedacted: true,
+        rootfsAttachStrategy: .none,
+        attachedFilesystemSource: nil,
+        attachedFilesystemSourceKnown: false
+    )
+}
+
+private extension Stage9DHotplugEvidence {
+    static let notAttempted = Stage9DHotplugEvidence(
+        preCreateRegistrationSucceeded: false,
+        podCreateSucceeded: false,
+        firstContainerStarted: false,
+        postCreateAddContainerAttempted: false,
+        postCreateAddContainerReachedProvider: false,
+        postCreateAddContainerSucceeded: false,
+        secondContainerStarted: false,
+        realHotplugSucceeded: false,
+        hotplugUnsupported: false,
+        providerInstalledButAttachUnsupported: false,
+        publicBlockHotplugAPIMissing: false,
+        failurePhase: nil,
+        failureErrorType: nil,
+        failureErrorMessage: nil,
+        blocker: .none
+    )
+
+    static let providerCalledButNotAttached = Stage9DHotplugEvidence(
+        preCreateRegistrationSucceeded: true,
+        podCreateSucceeded: true,
+        firstContainerStarted: true,
+        postCreateAddContainerAttempted: true,
+        postCreateAddContainerReachedProvider: true,
+        postCreateAddContainerSucceeded: false,
+        secondContainerStarted: false,
+        realHotplugSucceeded: false,
+        hotplugUnsupported: false,
+        providerInstalledButAttachUnsupported: true,
+        publicBlockHotplugAPIMissing: true,
+        failurePhase: "addContainer",
+        failureErrorType: "unsupported",
+        failureErrorMessage: "public block hotplug attach API missing",
+        blocker: .publicBlockHotplugAPIMissing
+    )
+
+    static let realSecondContainerStarted = Stage9DHotplugEvidence(
+        preCreateRegistrationSucceeded: true,
+        podCreateSucceeded: true,
+        firstContainerStarted: true,
+        postCreateAddContainerAttempted: true,
+        postCreateAddContainerReachedProvider: true,
+        postCreateAddContainerSucceeded: true,
+        secondContainerStarted: true,
+        realHotplugSucceeded: true,
+        hotplugUnsupported: false,
+        providerInstalledButAttachUnsupported: false,
+        publicBlockHotplugAPIMissing: false,
+        failurePhase: nil,
+        failureErrorType: nil,
+        failureErrorMessage: nil,
+        blocker: .none
+    )
+}
+
+private extension Stage9DCleanupEvidence {
+    static let clean = Stage9DCleanupEvidence(
+        cleanupResult: "clean",
+        cleanupStateDirectoryExistsAfterCleanup: false,
+        leftoverPathsCount: 0,
+        providerReleaseCalled: true,
+        attachedDeviceDetached: nil,
+        zeroAdapterOwnedLeftovers: true
+    )
+}
+
+private extension Stage9DInterpretationEvidence {
+    static let providerSpikeNeedsMoreWork = Stage9DInterpretationEvidence(
+        productHotplugAvailable: false,
+        productShouldDependOnHotplug: false,
+        nextRecommendedPath: .providerSpikeNeedsMoreWork
+    )
+
+    static let publicBlockHotplugAPIMissing = Stage9DInterpretationEvidence(
+        productHotplugAvailable: false,
+        productShouldDependOnHotplug: false,
+        nextRecommendedPath: .upstreamIssue
+    )
+
+    static let hotplugAvailable = Stage9DInterpretationEvidence(
+        productHotplugAvailable: true,
+        productShouldDependOnHotplug: false,
+        nextRecommendedPath: .forcedWarmServiceRecreateWithHotplug
+    )
+}
+
+private extension RootfsMaterializationDiagnostics {
+    static let fullCopy = RootfsMaterializationDiagnostics(
+        requestedStrategy: .fullCopy,
+        actualStrategy: .fullCopy,
+        fallbackStrategy: nil,
+        fallbackReason: nil,
+        cloneSupported: false,
+        cloneAttempted: false,
+        cloneReturnedSuccess: false,
+        cloneVerified: false,
+        cloneVerificationStrength: .notApplicable,
+        cloneSucceeded: false,
+        copyAttempted: true,
+        copySucceeded: true,
+        publicCloneAPIMissing: false,
+        byteForByteCopyAvoided: .false,
+        rootfsWorkAvoided: .false
+    )
+
+    static let cloneSuccess = RootfsMaterializationDiagnostics(
+        requestedStrategy: .clonefile,
+        actualStrategy: .clonefile,
+        fallbackStrategy: nil,
+        fallbackReason: nil,
+        cloneSupported: true,
+        cloneAttempted: true,
+        cloneReturnedSuccess: true,
+        cloneVerified: true,
+        cloneVerificationStrength: .strong,
+        cloneSucceeded: true,
+        copyAttempted: false,
+        copySucceeded: false,
+        publicCloneAPIMissing: false,
+        byteForByteCopyAvoided: .true,
+        rootfsWorkAvoided: .true
+    )
+
+    static let cloneFallback = RootfsMaterializationDiagnostics(
+        requestedStrategy: .clonefile,
+        actualStrategy: .fullCopy,
+        fallbackStrategy: .fullCopy,
+        fallbackReason: "clonefile returned ENOTSUP; fell back to fullCopy",
+        cloneSupported: false,
+        cloneAttempted: true,
+        cloneReturnedSuccess: false,
+        cloneVerified: false,
+        cloneVerificationStrength: .notApplicable,
+        cloneSucceeded: false,
+        copyAttempted: true,
+        copySucceeded: true,
+        publicCloneAPIMissing: false,
+        byteForByteCopyAvoided: .false,
+        rootfsWorkAvoided: .false
+    )
+
+    static let unsupportedClone = RootfsMaterializationDiagnostics(
+        requestedStrategy: .copyfileClone,
+        actualStrategy: .unsupported,
+        fallbackStrategy: nil,
+        fallbackReason: "public clone API unavailable",
+        cloneSupported: false,
+        cloneAttempted: false,
+        cloneReturnedSuccess: false,
+        cloneVerified: false,
+        cloneVerificationStrength: .notApplicable,
+        cloneSucceeded: false,
+        copyAttempted: false,
+        copySucceeded: false,
+        publicCloneAPIMissing: true,
+        byteForByteCopyAvoided: .unknown,
+        rootfsWorkAvoided: .unknown
+    )
+
+    static let cloneSuccessWithUnknownVerification = RootfsMaterializationDiagnostics(
+        requestedStrategy: .copyfileClone,
+        actualStrategy: .copyfileClone,
+        fallbackStrategy: nil,
+        fallbackReason: nil,
+        cloneSupported: true,
+        cloneAttempted: true,
+        cloneReturnedSuccess: true,
+        cloneVerified: false,
+        cloneVerificationStrength: .unknown,
+        cloneSucceeded: true,
+        copyAttempted: false,
+        copySucceeded: false,
+        publicCloneAPIMissing: false,
+        byteForByteCopyAvoided: .true,
+        rootfsWorkAvoided: .true
+    )
+}
+
+private extension RootfsMaterializationCleanupEvidence {
+    static let clean = RootfsMaterializationCleanupEvidence(
+        cleanupResult: "clean",
+        cleanupStateDirectoryExistsAfterCleanup: false,
+        leftoverPathsCount: 0,
+        zeroAdapterOwnedLeftovers: true
+    )
+}
+
+private extension RootfsMaterializationInterpretation {
+    static let diagnosticOnly = RootfsMaterializationInterpretation(
+        materializationImproved: false,
+        productReady: false,
+        nextRecommendedPath: .keepFullCopy
+    )
+
+    static let productReadyFixture = RootfsMaterializationInterpretation(
+        materializationImproved: true,
+        productReady: true,
+        nextRecommendedPath: .useClonefileForRootfs
+    )
+}
+
+private extension HotplugLifecycleDiagnostics {
+    static func completeTest(
+        podReuseClaim: PodReuseClaim = .liveObject,
+        hotplugSucceeded: Bool = true
+    ) -> HotplugLifecycleDiagnostics {
+        HotplugLifecycleDiagnostics(
+            podMarkerExists: true,
+            runtimeDirectoryExists: true,
+            podObjectInitialized: true,
+            podObjectPhase: "created",
+            podCreatedStateKnown: true,
+            podActuallyRunning: true,
+            podReconnectAttempted: false,
+            podReconnectSucceeded: false,
+            podReuseClaim: podReuseClaim,
+            addContainerAttempted: true,
+            addContainerPhase: .afterPodCreate,
+            hotplugAttempted: true,
+            hotplugSucceeded: hotplugSucceeded,
+            hotplugUnsupported: false,
+            duplicateContainerDetected: false,
+            failurePhase: nil,
+            failureErrorType: nil,
+            failureErrorMessage: nil,
+            mutationBeforeFailure: .false
+        )
+    }
+}
+
+private extension WarmServiceRecreateMetadata {
+    static let noOpWarmReconcileNotEvidence = WarmServiceRecreateMetadata(
+        forcedServiceRecreateRequested: false,
+        forcedServiceName: "api",
+        serviceChanged: false,
+        previousServiceStateKnown: true,
+        recreateStrategy: .noOp,
+        dbVolumePreserved: true,
+        podPreserved: true,
+        serviceRecreateDuration: nil,
+        postRecreateReadinessDuration: nil,
+        hostPortStatus: "notMeasured",
+        loadWindowStatus: "notMeasured",
+        noOpWarmReconcile: true,
+        notProductViabilityEvidence: true
+    )
 }

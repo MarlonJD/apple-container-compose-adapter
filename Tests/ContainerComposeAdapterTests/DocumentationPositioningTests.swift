@@ -4,6 +4,15 @@
 import XCTest
 
 final class DocumentationPositioningTests: XCTestCase {
+    func testContainerizationRuntimeDependencyTracksLatestHotplugTag() throws {
+        let package = try readText("Package.swift")
+        let executor = try readText("Sources/ContainerComposeAdapterLinuxPod/ContainerizationLinuxPodRuntimeExecutor.swift")
+
+        XCTAssertTrue(package.contains(#"exact: "0.33.4""#))
+        XCTAssertTrue(executor.contains(#"containerizationVersion = "0.33.4""#))
+        XCTAssertTrue(executor.contains(#"ghcr.io/apple/containerization/vminit:0.33.4"#))
+    }
+
     func testREADMEPositionsProjectBelowExistingContainerComposeWrappers() throws {
         let readme = try readText("README.md")
 
@@ -104,8 +113,11 @@ final class DocumentationPositioningTests: XCTestCase {
         let notesIndex = try readText("docs/plans/notes/index.md")
         let note = try readText("docs/plans/notes/2026-06-12-stage-6-cold-warm-benchmark-decision.md")
 
-        XCTAssertTrue(activeIndex.contains("Stage 8 signed A-G runtime evidence is recorded"))
-        XCTAssertTrue(activeIndex.contains("F failed with `invalidState: \"pod must be initialized to add container\"`"))
+        XCTAssertTrue(activeIndex.contains("Stage 9A/9B signed runtime evidence now covers `apple/containerization` `0.33.4`"))
+        XCTAssertTrue(activeIndex.contains("F still fails post-create hotplug"))
+        XCTAssertTrue(activeIndex.contains("G remains a no-op/non-viability all-warm reconcile"))
+        XCTAssertTrue(activeIndex.contains(#"unsupported: "hotplug not supported""#))
+        XCTAssertTrue(activeIndex.contains("LinuxPod still misses the Docker/OrbStack viability gate"))
         XCTAssertTrue(notesIndex.contains("note-closed | [Stage 6 Cold/Warm Comparative Benchmark Decision]"))
         XCTAssertTrue(notesIndex.contains("image-store-seeded fresh runtime `5/5` run"))
 
@@ -122,6 +134,78 @@ final class DocumentationPositioningTests: XCTestCase {
         XCTAssertFalse(note.contains("persistent warm LinuxPod failed"))
         XCTAssertFalse(note.contains("before any runtime mutation"))
         XCTAssertFalse(note.contains("host RAM savings"))
+    }
+
+    func testStage9DHotplugProviderFeasibilityStaysDiagnosticOnly() throws {
+        let activeIndex = try readText("docs/plans/index.md")
+        let notesIndex = try readText("docs/plans/notes/index.md")
+        let note = try readText("docs/plans/notes/2026-06-13-stage-9d-hotplug-provider-feasibility.md")
+        let issueDraft = try readText("docs/plans/notes/2026-06-13-apple-containerization-hotplug-provider-upstream-issue-draft.md")
+
+        XCTAssertTrue(activeIndex.contains("Stage 9D"))
+        XCTAssertTrue(activeIndex.contains("Stage 9D closed without product hotplug"))
+        XCTAssertTrue(activeIndex.contains("unsupportedRootfsBlockHotplug"))
+        XCTAssertTrue(notesIndex.contains("2026-06-13-stage-9d-hotplug-provider-feasibility.md"))
+        XCTAssertTrue(notesIndex.contains("note-closed | [Stage 9D Hotplug Provider Feasibility]"))
+        XCTAssertTrue(notesIndex.contains("2026-06-13-apple-containerization-hotplug-provider-upstream-issue-draft.md"))
+
+        XCTAssertTrue(note.contains("**Status:** `note-closed`"))
+        XCTAssertTrue(note.contains("Stage 9D exists because Stage 9B showed"))
+        XCTAssertTrue(note.contains("0.33.4"))
+        XCTAssertTrue(note.contains("hotplugProviderInstalled=false"))
+        XCTAssertTrue(note.contains("PR #740 added interfaces"))
+        XCTAssertTrue(note.contains("without forking"))
+        XCTAssertTrue(note.contains("must not be treated as product behavior unless the second container actually starts"))
+        XCTAssertTrue(note.contains("fast pod recreate + rootfs copy avoidance"))
+        XCTAssertTrue(note.contains("provider.hotplugProviderInstalled=true"))
+        XCTAssertTrue(note.contains("hotplug.postCreateAddContainerReachedProvider=true"))
+        XCTAssertTrue(note.contains("unsupportedRootfsBlockHotplug"))
+        XCTAssertTrue(note.contains("productHotplugAvailable=false"))
+        XCTAssertTrue(note.contains("No fork decision"))
+        XCTAssertTrue(note.contains("No host memory savings claim"))
+        XCTAssertTrue(note.contains("No Docker/OrbStack viability claim"))
+        XCTAssertFalse(note.contains("productHotplugAvailable=true"))
+        XCTAssertFalse(note.contains("Docker/OrbStack gate passed"))
+        XCTAssertFalse(note.contains("host memory savings achieved"))
+
+        XCTAssertTrue(issueDraft.contains("Do not post this issue from Codex"))
+        XCTAssertTrue(issueDraft.contains("0.33.4 active"))
+        XCTAssertTrue(issueDraft.contains("vmConfigExtensionCount=0"))
+        XCTAssertTrue(issueDraft.contains("hotplugProviderInstalled=false"))
+        XCTAssertTrue(issueDraft.contains(#""hotplug not supported""#))
+        XCTAssertTrue(issueDraft.contains("public extension/provider"))
+        XCTAssertTrue(issueDraft.contains("block/ext4 rootfs hotplug"))
+        XCTAssertTrue(issueDraft.contains("providerHotplugCalled=true"))
+        XCTAssertTrue(issueDraft.contains("unsupportedRootfsBlockHotplug"))
+    }
+
+    func testStage10ARootfsMaterializationFeasibilityStaysDiagnosticOnly() throws {
+        let activeIndex = try readText("docs/plans/index.md")
+        let notesIndex = try readText("docs/plans/notes/index.md")
+        let note = try readText("docs/plans/notes/2026-06-13-stage-10a-rootfs-materialization-feasibility.md")
+
+        XCTAssertTrue(activeIndex.contains("Stage 10A"))
+        XCTAssertTrue(activeIndex.contains("rootfs materialization"))
+        XCTAssertTrue(notesIndex.contains("2026-06-13-stage-10a-rootfs-materialization-feasibility.md"))
+
+        XCTAssertTrue(note.contains("Stage 10A follows Stage 9D"))
+        XCTAssertTrue(note.contains("unsupportedRootfsBlockHotplug"))
+        XCTAssertTrue(note.contains("fast pod recreate as the main product path"))
+        XCTAssertTrue(note.contains("dominant controllable cost is still rootfs materialization"))
+        XCTAssertTrue(note.contains("APFS clone/COW"))
+        XCTAssertTrue(note.contains("clonefile"))
+        XCTAssertTrue(note.contains("copyfileClone"))
+        XCTAssertTrue(note.contains("normal runtime default remains the\nexisting copy behavior"))
+        XCTAssertTrue(note.contains("Stage 10A is diagnostic feasibility, not product rewrite"))
+        XCTAssertTrue(note.contains("Hotplug remains an upstream/research track"))
+        XCTAssertTrue(note.contains("No host memory savings claim"))
+        XCTAssertTrue(note.contains("No Docker/OrbStack viability claim"))
+        XCTAssertTrue(note.contains("Do not claim Docker/OrbStack gate passed"))
+        XCTAssertTrue(note.contains("redacted adapter-owned paths only"))
+        XCTAssertTrue(note.contains("cleanup proof with zero adapter-owned leftovers"))
+        XCTAssertFalse(note.contains("Stage 10A proves Docker/OrbStack viability"))
+        XCTAssertFalse(note.contains("host memory savings achieved"))
+        XCTAssertFalse(note.contains("productReady=true"))
     }
 
     private func readText(_ relativePath: String) throws -> String {

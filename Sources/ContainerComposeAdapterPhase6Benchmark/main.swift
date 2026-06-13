@@ -29,6 +29,19 @@ struct Phase6BenchmarkHarness {
         let backend = LinuxPodBackend(runtimeExecutor: executor)
         var records: [Phase6BenchmarkIterationRecord] = []
 
+        if options.stage9BHotplugProbe {
+            try await runStage9BHotplugProbe(options, executor: executor)
+            return
+        }
+        if options.stage9DHotplugProviderProbe {
+            try await runStage9DHotplugProviderProbe(options, executor: executor)
+            return
+        }
+        if options.stage10ARootfsMaterializationProbe {
+            try await runStage10ARootfsMaterializationProbe(options, executor: executor)
+            return
+        }
+
         if let prepareSeedImageStore = options.prepareSeedImageStore {
             let seedPlan = try makePlan(
                 options: options,
@@ -87,6 +100,97 @@ struct Phase6BenchmarkHarness {
         )
         try appendJSONLine(summary, path: options.evidencePath)
         print("phase6-benchmark: completed \(options.iterations) iteration(s); evidence at \(options.evidencePath ?? "")")
+    }
+
+    private static func runStage9BHotplugProbe(
+        _ options: Phase6BenchmarkOptions,
+        executor: ContainerizationLinuxPodRuntimeExecutor
+    ) async throws {
+        let defaultImage = "docker.io/library/python:3.12-alpine"
+        let image = options.dockerHubMirror.map { mirror in
+            DockerHubOfficialImageMirror.rewrite(image: defaultImage, mirror: mirror)
+        } ?? defaultImage
+        FileHandle.standardError.write(
+            Data("stage9b-hotplug-probe: using image \(image)\n".utf8)
+        )
+        let records = await executor.runStage9BHotplugCapabilityProbe(
+            projectPrefix: options.projectPrefix,
+            runLabel: options.runLabel,
+            image: image
+        )
+        for record in records {
+            try appendJSONLine(record, path: options.evidencePath)
+        }
+        let diagnostics = Stage9BHotplugProbeEvidenceValidator().validate(records: records)
+        let blocking = diagnostics.filter { $0.severity == DiagnosticSeverity.blocking }
+        guard blocking.isEmpty else {
+            throw HarnessError.usage(
+                "Stage 9B hotplug probe evidence failed validation: \(blocking.map { $0.code }.joined(separator: ", "))"
+            )
+        }
+        print("stage9b-hotplug-probe: completed \(records.count) record(s); evidence at \(options.evidencePath ?? "")")
+    }
+
+    private static func runStage9DHotplugProviderProbe(
+        _ options: Phase6BenchmarkOptions,
+        executor: ContainerizationLinuxPodRuntimeExecutor
+    ) async throws {
+        let defaultImage = "docker.io/library/python:3.12-alpine"
+        let image = options.dockerHubMirror.map { mirror in
+            DockerHubOfficialImageMirror.rewrite(image: defaultImage, mirror: mirror)
+        } ?? defaultImage
+        FileHandle.standardError.write(
+            Data("stage9d-hotplug-provider-probe: using image \(image)\n".utf8)
+        )
+        let record = await executor.runStage9DHotplugProviderProbe(
+            projectPrefix: options.projectPrefix,
+            runLabel: options.runLabel,
+            image: image
+        )
+        try appendJSONLine(record, path: options.evidencePath)
+        let diagnostics = Stage9DHotplugProviderProbeEvidenceValidator().validate(records: [record])
+        let blocking = diagnostics.filter { $0.severity == DiagnosticSeverity.blocking }
+        guard blocking.isEmpty else {
+            throw HarnessError.usage(
+                "Stage 9D hotplug provider probe evidence failed validation: \(blocking.map { $0.code }.joined(separator: ", "))"
+            )
+        }
+        print("stage9d-hotplug-provider-probe: completed 1 record; evidence at \(options.evidencePath ?? "")")
+    }
+
+    private static func runStage10ARootfsMaterializationProbe(
+        _ options: Phase6BenchmarkOptions,
+        executor: ContainerizationLinuxPodRuntimeExecutor
+    ) async throws {
+        let defaultImage = "docker.io/library/postgres:16-alpine"
+        let image = options.dockerHubMirror.map { mirror in
+            DockerHubOfficialImageMirror.rewrite(image: defaultImage, mirror: mirror)
+        } ?? defaultImage
+        let strategies: [RootfsMaterializationStrategy] = options.rootfsMaterializationStrategy == .auto
+            ? [.fullCopy, .auto]
+            : [options.rootfsMaterializationStrategy]
+        FileHandle.standardError.write(
+            Data("stage10a-rootfs-materialization-probe: using image \(image); strategies \(strategies.map(\.rawValue).joined(separator: ","))\n".utf8)
+        )
+        var records: [RootfsMaterializationProbeRecord] = []
+        for strategy in strategies {
+            let record = await executor.runStage10ARootfsMaterializationProbe(
+                projectPrefix: options.projectPrefix,
+                runLabel: options.runLabel,
+                image: image,
+                strategy: strategy
+            )
+            try appendJSONLine(record, path: options.evidencePath)
+            records.append(record)
+        }
+        let diagnostics = Stage10ARootfsMaterializationProbeEvidenceValidator().validate(records: records)
+        let blocking = diagnostics.filter { $0.severity == DiagnosticSeverity.blocking }
+        guard blocking.isEmpty else {
+            throw HarnessError.usage(
+                "Stage 10A rootfs materialization evidence failed validation: \(blocking.map { $0.code }.joined(separator: ", "))"
+            )
+        }
+        print("stage10a-rootfs-materialization-probe: completed \(records.count) record(s); evidence at \(options.evidencePath ?? "")")
     }
 
     // Image-store-seeded fresh-runtime iterations copy a prepared local image
@@ -285,6 +389,7 @@ struct Phase6BenchmarkHarness {
         var guest: HostFootprintGuestStats?
         var actionCount = 0
         var upActionResults: [RuntimeActionResult] = []
+        var podExistedBeforeRun = false
         var seedResult = SeedImageStoreCopyResult.notRequested(
             projectRuntimeDirectoryExistedBeforeSeed: FileManager.default.fileExists(
                 atPath: backend.stateStore.runtimeDirectory(for: plan.project).path
@@ -300,7 +405,7 @@ struct Phase6BenchmarkHarness {
         )
 
         do {
-            let podExistedBeforeRun = await executor.hasCreatedPod(project: projectResource)
+            podExistedBeforeRun = await executor.hasCreatedPod(project: projectResource)
             seedResult = try await seedImageStoreIfRequested(options: options, plan: plan, backend: backend)
             environment = benchmarkEnvironment(
                 options: options,
@@ -344,6 +449,7 @@ struct Phase6BenchmarkHarness {
             actionCount += logs.actionResults.count
 
             let dataFootprintBeforeCleanup = dataFootprintBytes(projectDirectory)
+            let hotplugIntrospection = await executor.hotplugIntrospectionMetadata(project: projectResource)
             let cleanupStarted = Date()
             let cleanup = try await cleanupAfterIteration(
                 cleanupPolicy,
@@ -402,9 +508,31 @@ struct Phase6BenchmarkHarness {
                 healthcheckAttempts: up.actionResults.filter { $0.kind == .waitForReadiness }.count,
                 dataFootprintBytes: dataFootprintBeforeCleanup,
                 cleanupResult: cleanupResult,
-                failure: nil
+                failure: nil,
+                rootfsPreparation: rootfsPreparationBreakdowns(
+                    upActionResults,
+                    failedAddContainerMetadata: hotplugIntrospection
+                ),
+                hotplugDiagnostics: hotplugDiagnosticsIfNeeded(
+                    options: options,
+                    plan: plan,
+                    backend: backend,
+                    podExistedBeforeRun: podExistedBeforeRun,
+                    upActionResults: upActionResults,
+                    failure: nil,
+                    hotplugIntrospection: hotplugIntrospection
+                ),
+                warmServiceRecreate: warmServiceRecreateMetadataIfNeeded(
+                    options: options,
+                    plan: plan,
+                    backend: backend,
+                    podExistedBeforeRun: podExistedBeforeRun
+                ),
+                blockIOAttribution: "wholeRunOnly",
+                rootfsBlockIOAttribution: "notMeasured"
             )
         } catch {
+            let hotplugIntrospection = await executor.hotplugIntrospectionMetadata(project: projectResource)
             let cleanupStarted = Date()
             if let cleanup = try? await backend.execute(
                 command: .down,
@@ -432,7 +560,28 @@ struct Phase6BenchmarkHarness {
                 hostPhysicalMemoryStatus: .blocked,
                 actionCount: actionCount,
                 cleanupStateDirectoryExistsAfterCleanup: FileManager.default.fileExists(atPath: projectDirectory.path),
-                failure: "\(error)"
+                failure: "\(error)",
+                rootfsPreparation: rootfsPreparationBreakdowns(
+                    upActionResults,
+                    failedAddContainerMetadata: hotplugIntrospection
+                ),
+                hotplugDiagnostics: hotplugDiagnosticsIfNeeded(
+                    options: options,
+                    plan: plan,
+                    backend: backend,
+                    podExistedBeforeRun: podExistedBeforeRun,
+                    upActionResults: upActionResults,
+                    failure: error,
+                    hotplugIntrospection: hotplugIntrospection
+                ),
+                warmServiceRecreate: warmServiceRecreateMetadataIfNeeded(
+                    options: options,
+                    plan: plan,
+                    backend: backend,
+                    podExistedBeforeRun: podExistedBeforeRun
+                ),
+                blockIOAttribution: "wholeRunOnly",
+                rootfsBlockIOAttribution: "notMeasured"
             )
         }
     }
@@ -497,6 +646,262 @@ struct Phase6BenchmarkHarness {
             return nil
         }
         return values.reduce(0, +)
+    }
+
+    private static func rootfsPreparationBreakdowns(
+        _ results: [RuntimeActionResult],
+        failedAddContainerMetadata: [String: String] = [:]
+    ) -> [RootfsPreparationBreakdown]? {
+        let rootfsKinds: Set<PlannedActionKind> = [.prepareImageRootfs, .addContainer]
+        var sourceResults = results
+        let hasAddContainerRootfs = sourceResults.contains { result in
+            result.kind == .addContainer
+                && result.metadata.keys.contains(where: { $0.contains("rootfs") || $0.contains("Rootfs") })
+        }
+        if !hasAddContainerRootfs,
+           failedAddContainerMetadata.keys.contains(where: { $0.contains("rootfs") || $0.contains("Rootfs") }) {
+            sourceResults.append(
+                RuntimeActionResult(
+                    order: -1,
+                    kind: .addContainer,
+                    resourceName: failedAddContainerMetadata["failedAddContainerResourceName"],
+                    status: "failed",
+                    metadata: failedAddContainerMetadata
+                )
+            )
+        }
+        let breakdowns = sourceResults.compactMap { result -> RootfsPreparationBreakdown? in
+            guard rootfsKinds.contains(result.kind),
+                  result.metadata.keys.contains(where: { $0.contains("rootfs") || $0.contains("Rootfs") }) else {
+                return nil
+            }
+            return RootfsPreparationBreakdown(
+                actionKind: result.kind.rawValue,
+                resourceName: result.resourceName,
+                image: result.metadata["image"] ?? (result.kind == .prepareImageRootfs ? result.resourceName : nil),
+                service: result.metadata["service"],
+                imageReferenceResolveDuration: doubleMetadata(result, "imageReferenceResolveDuration"),
+                imageStoreLookupDuration: doubleMetadata(result, "imageStoreLookupDuration"),
+                platformValidationDuration: doubleMetadata(result, "platformValidationDuration"),
+                imagePullDuration: doubleMetadata(result, "imagePullDuration"),
+                baseRootfsCacheLookupDuration: doubleMetadata(result, "baseRootfsCacheLookupDuration"),
+                baseRootfsCacheHit: boolMetadata(result, "baseRootfsCacheHit"),
+                baseRootfsCreateOrUnpackDuration: doubleMetadata(result, "baseRootfsCreateOrUnpackDuration"),
+                containerRootfsMaterializeDuration: doubleMetadata(result, "containerRootfsMaterializeDuration"),
+                containerRootfsCopyDuration: doubleMetadata(result, "containerRootfsCopyDuration"),
+                containerRootfsCloneDuration: doubleMetadata(result, "containerRootfsCloneDuration"),
+                containerRootfsMountPrepareDuration: doubleMetadata(result, "containerRootfsMountPrepareDuration"),
+                rootfsBytesCopied: uint64Metadata(result, "rootfsBytesCopied"),
+                rootfsSourcePath: redactRepositoryPath(result.metadata["rootfsSourcePath"]),
+                rootfsDestinationPath: redactRepositoryPath(result.metadata["rootfsDestinationPath"]),
+                rootfsMountType: result.metadata["rootfsMountType"],
+                rootfsMountFormat: result.metadata["rootfsMountFormat"],
+                rootfsMountIsBlock: boolMetadata(result, "rootfsMountIsBlock"),
+                rootfsMaterializationStrategy: RootfsMaterializationStrategy(
+                    rawValue: result.metadata["rootfsMaterializationStrategy"] ?? ""
+                ) ?? .unknown,
+                rootfsWorkAvoided: EvidenceTruthValue(
+                    rawValue: result.metadata["rootfsWorkAvoided"] ?? ""
+                ) ?? .unknown,
+                rootfsCacheClaim: RootfsCacheClaim(
+                    rawValue: result.metadata["rootfsCacheClaim"] ?? ""
+                ) ?? .unknown
+            )
+        }
+        return breakdowns.isEmpty ? nil : breakdowns
+    }
+
+    private static func hotplugDiagnosticsIfNeeded(
+        options: Phase6BenchmarkOptions,
+        plan: RuntimePlan,
+        backend: LinuxPodBackend,
+        podExistedBeforeRun: Bool,
+        upActionResults: [RuntimeActionResult],
+        failure: Error?,
+        hotplugIntrospection: [String: String]
+    ) -> HotplugLifecycleDiagnostics? {
+        switch options.effectiveLifecycleMode {
+        case .persistentPodHotplug, .allWarmProjectRuntime:
+            break
+        case .coldRuntime,
+             .imageStoreSeededFreshRuntime,
+             .rootfsCacheHitRuntime,
+             .initfsCacheHitRuntime,
+             .warmPreservedVolume:
+            return nil
+        }
+
+        let runtimeDirectory = backend.stateStore.runtimeDirectory(for: plan.project)
+        let podMarker = backend.stateStore.podMarkerPath(project: plan.project)
+        let markerExists = FileManager.default.fileExists(atPath: podMarker.path)
+        let failureMessage = failure.map { "\($0)" }
+        let addContainerResults = upActionResults.filter { $0.kind == .addContainer }
+        let unsupportedHotplugFailure = failureMessage?.contains("hotplug not supported") == true
+        let inferredAddContainerFailure = failureMessage?.contains("pod must be initialized") == true
+            || failureMessage?.contains("add container") == true
+            || failureMessage?.contains("addContainer") == true
+            || unsupportedHotplugFailure
+        let addContainerAttempted = !addContainerResults.isEmpty || inferredAddContainerFailure
+        let podReuseClaim: PodReuseClaim
+        if podExistedBeforeRun {
+            podReuseClaim = .liveObject
+        } else if markerExists {
+            podReuseClaim = .markerOnly
+        } else {
+            podReuseClaim = .unknown
+        }
+        let addContainerPhase: AddContainerPhase
+        if addContainerAttempted {
+            addContainerPhase = podExistedBeforeRun ? .afterPodCreate : .beforePodCreate
+        } else {
+            addContainerPhase = podExistedBeforeRun ? .afterPodCreate : .unknown
+        }
+        let containerReuseOnly = addContainerResults.contains { $0.metadata["containerReuse"] == "hit" }
+        let hotplugAttempted = podExistedBeforeRun && addContainerAttempted && !containerReuseOnly
+        let hotplugSucceeded = failure == nil && hotplugAttempted && !addContainerResults.isEmpty
+        let mutationBeforeFailure: EvidenceTruthValue
+        if failure == nil {
+            mutationBeforeFailure = .false
+        } else if podExistedBeforeRun {
+            mutationBeforeFailure = .true
+        } else {
+            mutationBeforeFailure = .unknown
+        }
+
+        return HotplugLifecycleDiagnostics(
+            podMarkerExists: markerExists,
+            runtimeDirectoryExists: FileManager.default.fileExists(atPath: runtimeDirectory.path),
+            podObjectInitialized: podExistedBeforeRun,
+            podObjectPhase: podExistedBeforeRun ? "created" : "uninitialized",
+            podCreatedStateKnown: true,
+            podActuallyRunning: podExistedBeforeRun,
+            podReconnectAttempted: false,
+            podReconnectSucceeded: false,
+            podReuseClaim: podReuseClaim,
+            addContainerAttempted: addContainerAttempted,
+            addContainerPhase: addContainerPhase,
+            hotplugAttempted: hotplugAttempted,
+            hotplugSucceeded: hotplugSucceeded,
+            hotplugUnsupported: failureMessage?.contains("pod must be initialized") == true || unsupportedHotplugFailure ? true : nil,
+            duplicateContainerDetected: false,
+            vmConfigExtensionCount: intMetadata(hotplugIntrospection, "vmConfigExtensionCount"),
+            vmConfigExtensionTypes: stringListMetadata(hotplugIntrospection, "vmConfigExtensionTypes"),
+            hotplugProviderInstalled: boolMetadata(hotplugIntrospection, "hotplugProviderInstalled"),
+            hotplugProviderType: nonEmptyMetadata(hotplugIntrospection, "hotplugProviderType"),
+            hotplugProviderStatus: nonEmptyMetadata(hotplugIntrospection, "hotplugProviderStatus"),
+            failurePhase: failure == nil ? nil : (inferredAddContainerFailure ? "addContainer" : "unknown"),
+            failureErrorType: failure.map { errorType($0) },
+            failureErrorMessage: failureMessage,
+            mutationBeforeFailure: mutationBeforeFailure
+        )
+    }
+
+    private static func warmServiceRecreateMetadataIfNeeded(
+        options: Phase6BenchmarkOptions,
+        plan: RuntimePlan,
+        backend: LinuxPodBackend,
+        podExistedBeforeRun: Bool
+    ) -> WarmServiceRecreateMetadata? {
+        guard options.effectiveLifecycleMode == .allWarmProjectRuntime else {
+            return nil
+        }
+        let serviceName = plan.services.first { $0.name == "api" }?.name
+            ?? plan.services.first(where: { $0.kind == .service })?.name
+        let dbVolumePreserved = plan.volumes.contains { volume in
+            FileManager.default.fileExists(
+                atPath: backend.stateStore.volumeImagePath(project: plan.project, volume: volume).path
+            )
+        }
+        return WarmServiceRecreateMetadata(
+            forcedServiceRecreateRequested: false,
+            forcedServiceName: serviceName,
+            serviceChanged: false,
+            previousServiceStateKnown: podExistedBeforeRun,
+            recreateStrategy: .noOp,
+            dbVolumePreserved: dbVolumePreserved,
+            podPreserved: podExistedBeforeRun,
+            serviceRecreateDuration: nil,
+            postRecreateReadinessDuration: nil,
+            hostPortStatus: "notMeasured",
+            loadWindowStatus: "notMeasured",
+            noOpWarmReconcile: true,
+            notProductViabilityEvidence: true
+        )
+    }
+
+    private static func doubleMetadata(_ result: RuntimeActionResult, _ key: String) -> Double? {
+        result.metadata[key].flatMap(Double.init)
+    }
+
+    private static func uint64Metadata(_ result: RuntimeActionResult, _ key: String) -> UInt64? {
+        result.metadata[key].flatMap(UInt64.init)
+    }
+
+    private static func boolMetadata(_ result: RuntimeActionResult, _ key: String) -> Bool? {
+        guard let value = result.metadata[key] else {
+            return nil
+        }
+        return boolMetadataValue(value)
+    }
+
+    private static func intMetadata(_ metadata: [String: String], _ key: String) -> Int? {
+        metadata[key].flatMap(Int.init)
+    }
+
+    private static func boolMetadata(_ metadata: [String: String], _ key: String) -> Bool? {
+        guard let value = metadata[key] else {
+            return nil
+        }
+        return boolMetadataValue(value)
+    }
+
+    private static func nonEmptyMetadata(_ metadata: [String: String], _ key: String) -> String? {
+        guard let value = metadata[key], !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    private static func stringListMetadata(_ metadata: [String: String], _ key: String) -> [String]? {
+        guard let value = metadata[key], !value.isEmpty else {
+            return []
+        }
+        return value
+            .split(separator: ",")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func boolMetadataValue(_ value: String) -> Bool? {
+        switch value {
+        case "true":
+            return true
+        case "false":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private static func errorType(_ error: Error) -> String {
+        let description = "\(error)"
+        if description.contains("invalidState") {
+            return "invalidState"
+        }
+        if description.contains("unsupported") {
+            return "unsupported"
+        }
+        return String(describing: type(of: error))
+    }
+
+    private static func redactRepositoryPath(_ path: String?) -> String? {
+        guard let path else {
+            return nil
+        }
+        let repositoryRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .standardizedFileURL
+            .path
+        return path.replacingOccurrences(of: repositoryRoot, with: "<repo>")
     }
 
     private static func dataFootprintBytes(_ url: URL) -> UInt64? {

@@ -36,7 +36,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/containerization.git", exact: "0.26.5"),
+        .package(url: "https://github.com/apple/containerization.git", exact: "0.33.4"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.4.0")
     ],
     targets: [
@@ -47,6 +47,7 @@ let package = Package(
                 "ContainerComposeAdapter",
                 .product(name: "Containerization", package: "containerization"),
                 .product(name: "ContainerizationEXT4", package: "containerization"),
+                .product(name: "ContainerizationExtras", package: "containerization"),
                 .product(name: "SystemPackage", package: "swift-system")
             ]
         ),

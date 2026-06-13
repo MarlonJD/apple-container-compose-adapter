@@ -29,6 +29,10 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
     public var prepareSeedImageStore: String?
     public var dockerHubMirror: String?
     public var allowExternalSeedImageStore = false
+    public var stage9BHotplugProbe = false
+    public var stage9DHotplugProviderProbe = false
+    public var stage10ARootfsMaterializationProbe = false
+    public var rootfsMaterializationStrategy: RootfsMaterializationStrategy = .fullCopy
 
     public var effectiveSeedImageStore: String? {
         seedImageStore ?? prepareSeedImageStore
@@ -157,6 +161,22 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
                 options.prepareSeedImageStore = args[index]
             case "--allow-external-seed-image-store":
                 options.allowExternalSeedImageStore = true
+            case "--stage9b-hotplug-probe":
+                options.stage9BHotplugProbe = true
+            case "--stage9d-hotplug-provider-probe":
+                options.stage9DHotplugProviderProbe = true
+            case "--stage10a-rootfs-materialization-probe":
+                options.stage10ARootfsMaterializationProbe = true
+            case "--rootfs-materialization-strategy":
+                index += 1
+                guard index < args.count,
+                      let strategy = RootfsMaterializationStrategy(rawValue: args[index]),
+                      RootfsMaterializationStrategy.stage10AValues.contains(strategy) else {
+                    throw Phase6BenchmarkOptionsError.usage(
+                        "--rootfs-materialization-strategy must be fullCopy, fileManagerCopy, apfsClone, clonefile, copyfileClone, auto, unsupported, or unknown"
+                    )
+                }
+                options.rootfsMaterializationStrategy = strategy
             case "--docker-hub-mirror":
                 index += 1
                 guard index < args.count, !args[index].isEmpty else {
@@ -186,12 +206,23 @@ public struct Phase6BenchmarkOptions: Equatable, Sendable {
         guard options.evidencePath != nil else {
             throw Phase6BenchmarkOptionsError.usage("--evidence-jsonl is required")
         }
+        let enabledDiagnosticProbeCount = [
+            options.stage9BHotplugProbe,
+            options.stage9DHotplugProviderProbe,
+            options.stage10ARootfsMaterializationProbe
+        ].filter { $0 }.count
+        if enabledDiagnosticProbeCount > 1 {
+            throw Phase6BenchmarkOptionsError.usage("Choose only one diagnostic probe: --stage9b-hotplug-probe, --stage9d-hotplug-provider-probe, or --stage10a-rootfs-materialization-probe")
+        }
         return options
     }
 
     public static func usage() -> String {
         """
         Usage: container-compose-phase6-benchmark --evidence-jsonl path --approval-token token [--iterations n] [--project-prefix name] [--run-label label] [--lifecycle cold|image-store-seeded-fresh-runtime|persistent-warm-project-runtime] [--lifecycle-mode cold-runtime|image-store-seeded-fresh-runtime|rootfs-cache-hit-runtime|initfs-cache-hit-runtime|warm-preserved-volume|persistent-pod-hotplug|all-warm-project-runtime] [--compose-file path] [--seed-image-store path] [--prepare-seed-image-store path] [--allow-external-seed-image-store] [--docker-hub-mirror mirror.gcr.io]
+        Diagnostic: add --stage9b-hotplug-probe to run the LinuxPod addContainer lifecycle probe instead of the Phase 6 benchmark loop.
+        Diagnostic: add --stage9d-hotplug-provider-probe to run the custom HotplugProvider feasibility probe instead of the Phase 6 benchmark loop.
+        Diagnostic: add --stage10a-rootfs-materialization-probe [--rootfs-materialization-strategy fullCopy|fileManagerCopy|apfsClone|clonefile|copyfileClone|auto] to compare rootfs materialization strategies instead of the Phase 6 benchmark loop.
         """
     }
 
